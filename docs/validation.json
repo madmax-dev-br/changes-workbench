@@ -1,0 +1,119 @@
+{
+  "date": "2026-10-22T23:59:38.836515+00:00",
+  "version": "0.1.0",
+  "unitAndIntegration": {
+    "passed": 14,
+    "failed": 0
+  },
+  "browser": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "Changed files and compact tree load from real Git",
+        "passed": true
+      },
+      {
+        "name": "A single diff survives switching files",
+        "passed": true
+      },
+      {
+        "name": "Staged and unstaged comparisons use different bases",
+        "passed": true
+      },
+      {
+        "name": "Reviewed state is invalidated by an external file change",
+        "passed": true
+      },
+      {
+        "name": "Unified diff and line blame annotations render",
+        "passed": true
+      },
+      {
+        "name": "Lightweight definition preview resolves an imported class",
+        "passed": true
+      },
+      {
+        "name": "IntelliJ F7 and Alt+Right navigate the diff and files",
+        "passed": true
+      },
+      {
+        "name": "Clicking a gutter marker reveals original content",
+        "passed": true
+      },
+      {
+        "name": "Open native editor and return preserves the review",
+        "passed": true
+      }
+    ],
+    "failures": []
+  },
+  "desktop": [
+    {
+      "passed": true,
+      "host": "Visual Studio Code",
+      "version": "1.143.1",
+      "checks": [
+        "activation",
+        "single review tab",
+        "native Kotlin definition",
+        "native hover + blame",
+        "unsaved editor buffer",
+        "explicit deep enable/stop"
+      ]
+    },
+    {
+      "passed": true,
+      "host": "Cursor",
+      "version": "1.128.0",
+      "checks": [
+        "activation",
+        "single review tab",
+        "native Kotlin definition",
+        "native hover + blame",
+        "unsaved editor buffer",
+        "explicit deep enable/stop"
+      ]
+    }
+  ],
+  "realLanguageServers": {
+    "kotlin": "263.7084.0",
+    "jdtls": "1.63.0",
+    "javaRuntime": "JetBrains Runtime 25.0.4.1",
+    "results": [
+      {
+        "language": "java",
+        "passed": true,
+        "hover": true
+      },
+      {
+        "language": "kotlin",
+        "passed": true,
+        "hover": true
+      }
+    ]
+  },
+  "performance": {
+    "date": "2026-10-22T23:34:16.226Z",
+    "platform": "darwin arm64",
+    "cpu": "Apple M5 Pro",
+    "files": 10000,
+    "changed": 500,
+    "listMs": 27.51,
+    "coldNavigationMs": 175.79,
+    "warmP95Ms": 0.05,
+    "rssDeltaMiB": 111.14,
+    "totalRssMiB": 165.87,
+    "parsedFiles": 2,
+    "cacheHits": 30,
+    "candidates": 1,
+    "scope": "Git + lightweight navigation worker; excludes VS Code, webview renderer and optional JVMs"
+  },
+  "limits": [
+    "Android/Gradle projects have not been validated. Real-server smoke used a tiny JVM project.",
+    "The browser/OS can intercept shortcuts, including Cmd+9. The Changes status-bar button is a fallback.",
+    "Lightweight mode offers candidate resolution, not complete type inference.",
+    "Double-tap Shift/Ctrl and IDE-specific build/refactoring actions are outside the keymap port.",
+    "No JVM remains running after stopping deep analysis in the real-server tests."
+  ],
+  "vsixSha256": "e626dec7866e490893ed9c594aa8f2c18fd11dde79fe950444871b92a61e0ea5"
+}
