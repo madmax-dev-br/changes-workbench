@@ -1,0 +1,28 @@
+{
+  "screen": "changes",
+  "title": "Changes Workbench",
+  "capture": "npm run test:web",
+  "sizes": [
+    {
+      "id": "small",
+      "width": 900,
+      "height": 650
+    },
+    {
+      "id": "notebook",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "full-hd",
+      "width": 1920,
+      "height": 1080
+    }
+  ],
+  "themes": [
+    "dark",
+    "darcula",
+    "light"
+  ],
+  "approval": "Owner only, through npm run review"
+}

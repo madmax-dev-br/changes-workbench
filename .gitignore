@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.tools/
+.dev/
+*.vsix
+docs/layout-review/shots/
+test-results/
+assets/

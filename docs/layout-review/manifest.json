@@ -1,0 +1,410 @@
+{
+  "generatedAt": "2026-10-22T23:59:15.537Z",
+  "screens": [
+    {
+      "id": "small-dark",
+      "title": "Changes · 900×650 · dark",
+      "file": "shots/small-dark.png",
+      "fingerprint": "3d51c425e2983c8868cc04d61095eff85a7dee273dc9d413b6f0e8df1ec37130",
+      "buildHash": "31b30cf7a78f3f224a68195bcb782124ef9b38716f0904b0994ff85e7530596e",
+      "metrics": [
+        {
+          "selector": ".topbar",
+          "width": 852,
+          "height": 57,
+          "outside": false
+        },
+        {
+          "selector": ".sidebar",
+          "width": 290,
+          "height": 473,
+          "outside": false
+        },
+        {
+          "selector": ".review-area",
+          "width": 561,
+          "height": 473,
+          "outside": false
+        },
+        {
+          "selector": ".filebar",
+          "width": 561,
+          "height": 51,
+          "outside": false
+        },
+        {
+          "selector": ".diff-toolbar",
+          "width": 561,
+          "height": 42,
+          "outside": false
+        },
+        {
+          "selector": "footer",
+          "width": 852,
+          "height": 28,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "id": "notebook-dark",
+      "title": "Changes · 1440×900 · dark",
+      "file": "shots/notebook-dark.png",
+      "fingerprint": "80ad4cd899a0cd5442a28649e3d8035e7085a7d4dd95ab00b50fdfae3315660a",
+      "buildHash": "31b30cf7a78f3f224a68195bcb782124ef9b38716f0904b0994ff85e7530596e",
+      "metrics": [
+        {
+          "selector": ".topbar",
+          "width": 1392,
+          "height": 57,
+          "outside": false
+        },
+        {
+          "selector": ".sidebar",
+          "width": 290,
+          "height": 723,
+          "outside": false
+        },
+        {
+          "selector": ".review-area",
+          "width": 1101,
+          "height": 723,
+          "outside": false
+        },
+        {
+          "selector": ".filebar",
+          "width": 1101,
+          "height": 51,
+          "outside": false
+        },
+        {
+          "selector": ".diff-toolbar",
+          "width": 1101,
+          "height": 42,
+          "outside": false
+        },
+        {
+          "selector": "footer",
+          "width": 1392,
+          "height": 28,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "id": "full-hd-dark",
+      "title": "Changes · 1920×1080 · dark",
+      "file": "shots/full-hd-dark.png",
+      "fingerprint": "f67da73ac3965d078d953b6bff7dd6cbccdcca9d85d725e524b8e9e97e8a8ec0",
+      "buildHash": "31b30cf7a78f3f224a68195bcb782124ef9b38716f0904b0994ff85e7530596e",
+      "metrics": [
+        {
+          "selector": ".topbar",
+          "width": 1872,
+          "height": 57,
+          "outside": false
+        },
+        {
+          "selector": ".sidebar",
+          "width": 290,
+          "height": 903,
+          "outside": false
+        },
+        {
+          "selector": ".review-area",
+          "width": 1581,
+          "height": 903,
+          "outside": false
+        },
+        {
+          "selector": ".filebar",
+          "width": 1581,
+          "height": 51,
+          "outside": false
+        },
+        {
+          "selector": ".diff-toolbar",
+          "width": 1581,
+          "height": 42,
+          "outside": false
+        },
+        {
+          "selector": "footer",
+          "width": 1872,
+          "height": 28,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "id": "small-darcula",
+      "title": "Changes · 900×650 · darcula",
+      "file": "shots/small-darcula.png",
+      "fingerprint": "30a272f4614280a47cc6c9277219997b097b2fda582d65bf9732621cd114c0e3",
+      "buildHash": "31b30cf7a78f3f224a68195bcb782124ef9b38716f0904b0994ff85e7530596e",
+      "metrics": [
+        {
+          "selector": ".topbar",
+          "width": 852,
+          "height": 57,
+          "outside": false
+        },
+        {
+          "selector": ".sidebar",
+          "width": 290,
+          "height": 473,
+          "outside": false
+        },
+        {
+          "selector": ".review-area",
+          "width": 561,
+          "height": 473,
+          "outside": false
+        },
+        {
+          "selector": ".filebar",
+          "width": 561,
+          "height": 51,
+          "outside": false
+        },
+        {
+          "selector": ".diff-toolbar",
+          "width": 561,
+          "height": 42,
+          "outside": false
+        },
+        {
+          "selector": "footer",
+          "width": 852,
+          "height": 28,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "id": "notebook-darcula",
+      "title": "Changes · 1440×900 · darcula",
+      "file": "shots/notebook-darcula.png",
+      "fingerprint": "7edd0d521e9b7d09182dc108e1bd09150a28e84eac89ff8654f0e3334d560378",
+      "buildHash": "31b30cf7a78f3f224a68195bcb782124ef9b38716f0904b0994ff85e7530596e",
+      "metrics": [
+        {
+          "selector": ".topbar",
+          "width": 1392,
+          "height": 57,
+          "outside": false
+        },
+        {
+          "selector": ".sidebar",
+          "width": 290,
+          "height": 723,
+          "outside": false
+        },
+        {
+          "selector": ".review-area",
+          "width": 1101,
+          "height": 723,
+          "outside": false
+        },
+        {
+          "selector": ".filebar",
+          "width": 1101,
+          "height": 51,
+          "outside": false
+        },
+        {
+          "selector": ".diff-toolbar",
+          "width": 1101,
+          "height": 42,
+          "outside": false
+        },
+        {
+          "selector": "footer",
+          "width": 1392,
+          "height": 28,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "id": "full-hd-darcula",
+      "title": "Changes · 1920×1080 · darcula",
+      "file": "shots/full-hd-darcula.png",
+      "fingerprint": "59d78cde57fc676df9203f3d96fb7639eb0e4f462d7afc2e285073b6c296eaef",
+      "buildHash": "31b30cf7a78f3f224a68195bcb782124ef9b38716f0904b0994ff85e7530596e",
+      "metrics": [
+        {
+          "selector": ".topbar",
+          "width": 1872,
+          "height": 57,
+          "outside": false
+        },
+        {
+          "selector": ".sidebar",
+          "width": 290,
+          "height": 903,
+          "outside": false
+        },
+        {
+          "selector": ".review-area",
+          "width": 1581,
+          "height": 903,
+          "outside": false
+        },
+        {
+          "selector": ".filebar",
+          "width": 1581,
+          "height": 51,
+          "outside": false
+        },
+        {
+          "selector": ".diff-toolbar",
+          "width": 1581,
+          "height": 42,
+          "outside": false
+        },
+        {
+          "selector": "footer",
+          "width": 1872,
+          "height": 28,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "id": "small-light",
+      "title": "Changes · 900×650 · light",
+      "file": "shots/small-light.png",
+      "fingerprint": "0dc806cc578295be32d06d1759c0a343eab0b2195cb39c126edd9fdbe99f1c2f",
+      "buildHash": "31b30cf7a78f3f224a68195bcb782124ef9b38716f0904b0994ff85e7530596e",
+      "metrics": [
+        {
+          "selector": ".topbar",
+          "width": 852,
+          "height": 57,
+          "outside": false
+        },
+        {
+          "selector": ".sidebar",
+          "width": 290,
+          "height": 473,
+          "outside": false
+        },
+        {
+          "selector": ".review-area",
+          "width": 561,
+          "height": 473,
+          "outside": false
+        },
+        {
+          "selector": ".filebar",
+          "width": 561,
+          "height": 51,
+          "outside": false
+        },
+        {
+          "selector": ".diff-toolbar",
+          "width": 561,
+          "height": 42,
+          "outside": false
+        },
+        {
+          "selector": "footer",
+          "width": 852,
+          "height": 28,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "id": "notebook-light",
+      "title": "Changes · 1440×900 · light",
+      "file": "shots/notebook-light.png",
+      "fingerprint": "052f438efbda0299e47db911880dbd7f99429d48af3b66e0d19744432e447d54",
+      "buildHash": "31b30cf7a78f3f224a68195bcb782124ef9b38716f0904b0994ff85e7530596e",
+      "metrics": [
+        {
+          "selector": ".topbar",
+          "width": 1392,
+          "height": 57,
+          "outside": false
+        },
+        {
+          "selector": ".sidebar",
+          "width": 290,
+          "height": 723,
+          "outside": false
+        },
+        {
+          "selector": ".review-area",
+          "width": 1101,
+          "height": 723,
+          "outside": false
+        },
+        {
+          "selector": ".filebar",
+          "width": 1101,
+          "height": 51,
+          "outside": false
+        },
+        {
+          "selector": ".diff-toolbar",
+          "width": 1101,
+          "height": 42,
+          "outside": false
+        },
+        {
+          "selector": "footer",
+          "width": 1392,
+          "height": 28,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "id": "full-hd-light",
+      "title": "Changes · 1920×1080 · light",
+      "file": "shots/full-hd-light.png",
+      "fingerprint": "46586b395b1156cda2d88a3c300ee0de655c911d8c6d3bddcddd7e41be27b22a",
+      "buildHash": "31b30cf7a78f3f224a68195bcb782124ef9b38716f0904b0994ff85e7530596e",
+      "metrics": [
+        {
+          "selector": ".topbar",
+          "width": 1872,
+          "height": 57,
+          "outside": false
+        },
+        {
+          "selector": ".sidebar",
+          "width": 290,
+          "height": 903,
+          "outside": false
+        },
+        {
+          "selector": ".review-area",
+          "width": 1581,
+          "height": 903,
+          "outside": false
+        },
+        {
+          "selector": ".filebar",
+          "width": 1581,
+          "height": 51,
+          "outside": false
+        },
+        {
+          "selector": ".diff-toolbar",
+          "width": 1581,
+          "height": 42,
+          "outside": false
+        },
+        {
+          "selector": "footer",
+          "width": 1872,
+          "height": 28,
+          "outside": false
+        }
+      ]
+    }
+  ]
+}

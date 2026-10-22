@@ -1,0 +1,560 @@
+{
+  "name": "changes-workbench",
+  "displayName": "Changes Workbench",
+  "description": "A focused Git review workspace with on-demand Kotlin and Java navigation.",
+  "version": "0.1.0",
+  "publisher": "local-workbench",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "changesWorkbench.open",
+        "title": "Changes: Open Workbench",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "changesWorkbench.nextFile",
+        "title": "Changes: Next File"
+      },
+      {
+        "command": "changesWorkbench.previousFile",
+        "title": "Changes: Previous File"
+      },
+      {
+        "command": "changesWorkbench.nextChange",
+        "title": "Changes: Next Change"
+      },
+      {
+        "command": "changesWorkbench.previousChange",
+        "title": "Changes: Previous Change"
+      },
+      {
+        "command": "changesWorkbench.toggleBlame",
+        "title": "Changes: Toggle Blame"
+      },
+      {
+        "command": "changesWorkbench.definition",
+        "title": "Changes: Open Definition"
+      },
+      {
+        "command": "changesWorkbench.toggleReviewed",
+        "title": "Changes: Mark / Unmark Reviewed"
+      },
+      {
+        "command": "changesWorkbench.startDeep",
+        "title": "Changes: Start Deep Analysis"
+      },
+      {
+        "command": "changesWorkbench.stopDeep",
+        "title": "Changes: Stop Deep Analysis"
+      },
+      {
+        "command": "changesWorkbench.configureDeep",
+        "title": "Changes: Configure Language Servers"
+      },
+      {
+        "command": "changesWorkbench.openCommit",
+        "title": "Changes: Open Line Commit"
+      },
+      {
+        "command": "changesWorkbench.chooseTheme",
+        "title": "Changes: Choose IntelliJ Theme"
+      },
+      {
+        "command": "changesWorkbench.openEditor",
+        "title": "Changes: Open Current File in Editor"
+      },
+      {
+        "command": "changesWorkbench.quickDocumentation",
+        "title": "Changes: Quick Documentation"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "changesWorkbench.open",
+          "group": "navigation"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "changesWorkbench.open",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "changesWorkbench.definition",
+          "when": "editorLangId == kotlin || editorLangId == java",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "changesWorkbench.open",
+        "key": "alt+9",
+        "mac": "cmd+9",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "changesWorkbench.open",
+        "key": "alt+0",
+        "mac": "cmd+0",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "changesWorkbench.nextChange",
+        "key": "f7",
+        "mac": "f7",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.active"
+      },
+      {
+        "command": "changesWorkbench.previousChange",
+        "key": "shift+f7",
+        "mac": "shift+f7",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.active"
+      },
+      {
+        "command": "changesWorkbench.openEditor",
+        "key": "f4",
+        "mac": "f4",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.active"
+      },
+      {
+        "command": "changesWorkbench.definition",
+        "key": "ctrl+b",
+        "mac": "cmd+b",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.active"
+      },
+      {
+        "command": "changesWorkbench.quickDocumentation",
+        "key": "ctrl+q",
+        "mac": "f1",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.revealDefinition",
+        "key": "ctrl+b",
+        "mac": "cmd+b",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.goToTypeDefinition",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.goToImplementation",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.referenceSearch.trigger",
+        "key": "alt+f7",
+        "mac": "alt+f7",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.showHover",
+        "key": "ctrl+q",
+        "mac": "f1",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.triggerParameterHints",
+        "key": "ctrl+p",
+        "mac": "cmd+p",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.marker.nextInFiles",
+        "key": "f2",
+        "mac": "f2",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.marker.prevInFiles",
+        "key": "shift+f2",
+        "mac": "shift+f2",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.smartSelect.expand",
+        "key": "ctrl+w",
+        "mac": "alt+up",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.smartSelect.shrink",
+        "key": "ctrl+shift+w",
+        "mac": "alt+down",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.selectHighlights",
+        "key": "ctrl+alt+shift+j",
+        "mac": "cmd+ctrl+g",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.addSelectionToNextFindMatch",
+        "key": "alt+j",
+        "mac": "ctrl+g",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.jumpToBracket",
+        "key": "ctrl+shift+m",
+        "mac": "ctrl+m",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "workbench.action.gotoSymbol",
+        "key": "ctrl+f12",
+        "mac": "cmd+f12",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "workbench.action.gotoLine",
+        "key": "ctrl+g",
+        "mac": "cmd+l",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !changesWorkbench.active"
+      },
+      {
+        "command": "editor.action.copyLinesDownAction",
+        "key": "ctrl+d",
+        "mac": "cmd+d",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.deleteLines",
+        "key": "ctrl+y",
+        "mac": "cmd+backspace",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.moveLinesUpAction",
+        "key": "alt+shift+up",
+        "mac": "alt+shift+up",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.moveLinesDownAction",
+        "key": "alt+shift+down",
+        "mac": "alt+shift+down",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.joinLines",
+        "key": "ctrl+shift+j",
+        "mac": "ctrl+shift+j",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.formatDocument",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.rename",
+        "key": "shift+f6",
+        "mac": "shift+f6",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.quickFix",
+        "key": "alt+enter",
+        "mac": "alt+enter",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.refactor",
+        "key": "ctrl+alt+shift+t",
+        "mac": "ctrl+t",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.blockComment",
+        "key": "ctrl+shift+/",
+        "mac": "cmd+alt+/",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.insertLineAfter",
+        "key": "shift+enter",
+        "mac": "shift+enter",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.insertLineBefore",
+        "key": "ctrl+alt+enter",
+        "mac": "cmd+alt+enter",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "editor.action.startFindReplaceAction",
+        "key": "ctrl+r",
+        "mac": "cmd+r",
+        "when": "config.changesWorkbench.intellijKeymap && editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "workbench.action.showCommands",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.quickOpen",
+        "key": "ctrl+e",
+        "mac": "cmd+e",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.quickOpen",
+        "key": "ctrl+shift+n",
+        "mac": "cmd+shift+o",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.showAllSymbols",
+        "key": "ctrl+alt+shift+n",
+        "mac": "cmd+alt+o",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.findInFiles",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.replaceInFiles",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.navigateBack",
+        "key": "ctrl+alt+left",
+        "mac": "cmd+[",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.navigateForward",
+        "key": "ctrl+alt+right",
+        "mac": "cmd+]",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.navigateToLastEditLocation",
+        "key": "ctrl+shift+backspace",
+        "mac": "cmd+shift+backspace",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.view.explorer",
+        "key": "alt+1",
+        "mac": "cmd+1",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.problems.focus",
+        "key": "alt+6",
+        "mac": "cmd+6",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.openSettings",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+,",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.nextEditor",
+        "key": "alt+right",
+        "mac": "cmd+shift+]",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "workbench.action.previousEditor",
+        "key": "alt+left",
+        "mac": "cmd+shift+[",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
+      {
+        "command": "changesWorkbench.nextFile",
+        "key": "alt+right",
+        "mac": "alt+right",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.active"
+      },
+      {
+        "command": "changesWorkbench.previousFile",
+        "key": "alt+left",
+        "mac": "alt+left",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.active"
+      }
+    ],
+    "configuration": {
+      "title": "Changes Workbench",
+      "properties": {
+        "changesWorkbench.diffLayout": {
+          "type": "string",
+          "enum": [
+            "sideBySide",
+            "unified"
+          ],
+          "default": "sideBySide",
+          "description": "Initial diff presentation."
+        },
+        "changesWorkbench.cacheMiB": {
+          "type": "number",
+          "default": 64,
+          "minimum": 8,
+          "maximum": 256,
+          "description": "Maximum parsed-source cache size in MiB."
+        },
+        "changesWorkbench.kotlin.command": {
+          "type": "string",
+          "default": "kotlin-lsp",
+          "scope": "machine",
+          "description": "Local Kotlin LSP launcher (stdio)."
+        },
+        "changesWorkbench.kotlin.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "--stdio"
+          ],
+          "scope": "machine"
+        },
+        "changesWorkbench.java.command": {
+          "type": "string",
+          "default": "jdtls",
+          "scope": "machine",
+          "description": "Local Eclipse JDT LS launcher."
+        },
+        "changesWorkbench.java.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine"
+        },
+        "changesWorkbench.deepIdleMinutes": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "description": "Stop owned language servers after inactivity."
+        },
+        "changesWorkbench.intellijKeymap": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use IntelliJ shortcuts for navigation, editing, search and review. Disable when using another keymap extension."
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "kotlin",
+        "aliases": [
+          "Kotlin",
+          "kotlin"
+        ],
+        "extensions": [
+          ".kt",
+          ".kts"
+        ],
+        "configuration": "./languages/kotlin-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kotlin",
+        "scopeName": "source.kotlin",
+        "path": "./languages/kotlin.tmLanguage.json"
+      }
+    ],
+    "themes": [
+      {
+        "label": "Changes: IntelliJ Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/dark.json"
+      },
+      {
+        "label": "Changes: IntelliJ Darcula",
+        "uiTheme": "vs-dark",
+        "path": "./themes/darcula.json"
+      },
+      {
+        "label": "Changes: IntelliJ Light",
+        "uiTheme": "vs",
+        "path": "./themes/light.json"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository --out changes-workbench.vsix",
+    "vscode:prepublish": "npm run check",
+    "dev:web": "node scripts/dev-web.mjs",
+    "test:web": "node scripts/test-web.mjs",
+    "bench": "tsx scripts/benchmark.ts",
+    "review": "node scripts/review-server.mjs",
+    "test:desktop": "node scripts/test-desktop.mjs",
+    "format": "prettier --write src test scripts package.json tsconfig.json",
+    "test:lsp": "tsx scripts/test-real-lsp.ts"
+  },
+  "dependencies": {
+    "diff": "^8.0.0",
+    "monaco-editor": "^0.52.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "vscode-jsonrpc": "^8.2.1",
+    "web-tree-sitter": "0.24.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/vscode": "^1.96.0",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0",
+    "playwright": "^1.56.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,9 @@
+**
+!package.json
+!README.md
+!LICENSE
+!dist/**
+!assets/**
+!themes/**
+!languages/**
+!docs/appearance.md

@@ -1,0 +1,71 @@
+{
+  "name": "Kotlin",
+  "scopeName": "source.kotlin",
+  "patterns": [
+    {
+      "name": "comment.line.double-slash.kotlin",
+      "match": "//.*$"
+    },
+    {
+      "name": "comment.block.kotlin",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    {
+      "name": "string.quoted.triple.kotlin",
+      "begin": "\"\"\"",
+      "end": "\"\"\""
+    },
+    {
+      "name": "string.quoted.double.kotlin",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.kotlin",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "string.quoted.single.kotlin",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.kotlin",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "storage.type.function.kotlin",
+      "match": "\\b(fun)\\s+([\\w`]+)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.kotlin"
+        },
+        "2": {
+          "name": "entity.name.function.kotlin"
+        }
+      }
+    },
+    {
+      "name": "keyword.control.kotlin",
+      "match": "\\b(?:package|import|class|object|interface|fun|val|var|return|if|else|when|for|while|do|try|catch|finally|throw|in|is|as|by|where|this|super|null|true|false|public|private|protected|internal|open|override|abstract|final|data|sealed|enum|annotation|companion|suspend|inline|reified|lateinit|const|constructor|init|typealias|out|vararg|tailrec|operator|infix|crossinline|noinline|expect|actual)\\b"
+    },
+    {
+      "name": "constant.numeric.kotlin",
+      "match": "\\b(?:0[xX][\\da-fA-F_]+|\\d[\\d_]*(?:\\.\\d[\\d_]*)?(?:[eE][+-]?\\d+)?[fFLuU]*)\\b"
+    },
+    {
+      "name": "storage.type.annotation.kotlin",
+      "match": "@[\\w.]+"
+    }
+  ]
+}

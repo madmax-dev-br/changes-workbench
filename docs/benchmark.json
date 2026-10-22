@@ -1,0 +1,16 @@
+{
+  "date": "2026-10-22T23:34:16.226Z",
+  "platform": "darwin arm64",
+  "cpu": "Apple M5 Pro",
+  "files": 10000,
+  "changed": 500,
+  "listMs": 27.51,
+  "coldNavigationMs": 175.79,
+  "warmP95Ms": 0.05,
+  "rssDeltaMiB": 111.14,
+  "totalRssMiB": 165.87,
+  "parsedFiles": 2,
+  "cacheHits": 30,
+  "candidates": 1,
+  "scope": "Git + lightweight navigation worker; excludes VS Code, webview renderer and optional JVMs"
+}
