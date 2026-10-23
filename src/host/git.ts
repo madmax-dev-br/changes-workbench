@@ -162,7 +162,9 @@ export class GitService {
     if (!ref) return Buffer.alloc(0);
     // A missing path is expected for additions/deletions; other Git errors must remain visible.
     try {
-      return await this.git(["show", `${ref}:${file}`], {
+      // Read a blob explicitly: revision/path parsing in `show` can fall back
+      // to commit output for a missing path on some Git versions.
+      return await this.git(["cat-file", "blob", `${ref}:${file}`], {
         signal,
         maxBytes: 12 * 1024 * 1024,
       });
@@ -170,7 +172,7 @@ export class GitService {
       if (signal?.aborted) throw error;
       const message = String(error);
       if (
-        /does not exist|exists on disk, but not in|does not exist in|unknown revision|invalid object name|bad revision|not in the index/.test(
+        /does not exist|exists on disk, but not in|does not exist in|unknown revision|invalid object name|Not a valid object name|bad revision|not in the index/.test(
           message,
         )
       )
@@ -253,13 +255,17 @@ export class GitService {
   private async blobIndex(file: string, signal?: AbortSignal) {
     this.validate(file);
     try {
-      return await this.git(["show", `:${file}`], {
+      return await this.git(["cat-file", "blob", `:${file}`], {
         signal,
         maxBytes: 12 * 1024 * 1024,
       });
     } catch (e) {
       if (signal?.aborted) throw e;
-      if (/not in the index|does not exist|unmerged/.test(String(e)))
+      if (
+        /not in the index|does not exist|Not a valid object name|unmerged/.test(
+          String(e),
+        )
+      )
         return Buffer.alloc(0);
       throw e;
     }
