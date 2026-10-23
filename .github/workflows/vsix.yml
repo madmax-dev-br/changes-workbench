@@ -1,0 +1,110 @@
+name: Build VSIX
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vsix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Validate and package extension
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      # The tests need the bundled parser worker and WASM assets from this build.
+      # vsce also runs vscode:prepublish, which performs the TypeScript check.
+      - name: Build, typecheck and package
+        run: npm run package
+
+      - name: Test Git, navigation and server lifecycle
+        run: npm test
+
+      - name: Verify packaged extension
+        run: |
+          python3 - <<'PY'
+          import json
+          import zipfile
+
+          with zipfile.ZipFile('changes-workbench.vsix') as archive:
+              assert archive.testzip() is None, 'Corrupted VSIX archive'
+              names = set(archive.namelist())
+              required = {
+                  '[Content_Types].xml', 'extension.vsixmanifest',
+                  'extension/package.json', 'extension/readme.md', 'extension/LICENSE.txt',
+                  'extension/dist/extension.cjs', 'extension/dist/parser-worker.cjs',
+                  'extension/dist/webview.js', 'extension/dist/webview.css',
+                  'extension/dist/editor.worker.js',
+                  'extension/assets/tree-sitter.wasm',
+                  'extension/assets/tree-sitter-java.wasm',
+                  'extension/assets/tree-sitter-kotlin.wasm',
+                  'extension/assets/THIRD_PARTY_NOTICES.txt',
+                  'extension/themes/dark.json', 'extension/themes/darcula.json',
+                  'extension/themes/light.json', 'extension/languages/kotlin.tmLanguage.json',
+              }
+              assert not required - names, f'Missing files: {sorted(required - names)}'
+              excluded = ('extension/.dev/', 'extension/.github/', 'extension/node_modules/', 'extension/test/')
+              assert not any(name.startswith(excluded) for name in names), 'Development files in VSIX'
+              packaged = json.loads(archive.read('extension/package.json'))
+              with open('package.json') as source:
+                  expected = json.load(source)
+              assert packaged['name'] == expected['name']
+              assert packaged['version'] == expected['version']
+              print(f"Verified {packaged['name']} {packaged['version']}: {len(names)} packaged files")
+          PY
+
+      - name: Prepare download and checksum
+        id: package
+        run: |
+          version=$(node -p "require('./package.json').version")
+          mkdir -p "$RUNNER_TEMP/vsix"
+          cp changes-workbench.vsix "$RUNNER_TEMP/vsix/changes-workbench-${version}.vsix"
+          cd "$RUNNER_TEMP/vsix"
+          sha256sum *.vsix > SHA256SUMS.txt
+          echo "name=changes-workbench-${version}-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload installable VSIX
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ runner.temp }}/vsix/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Add download instructions
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          {
+            echo '## Changes Workbench VSIX'
+            echo
+            echo "[Download the extension package](${ARTIFACT_URL})"
+            echo
+            echo 'Extract the artifact ZIP, then run **Extensions: Install from VSIX** in VS Code or Cursor and select the `.vsix` file.'
+            echo
+            echo 'The artifact includes SHA256SUMS.txt and is retained for 30 days. Browser, desktop and real language-server validation are separate from this packaging pipeline.'
+          } >> "$GITHUB_STEP_SUMMARY"

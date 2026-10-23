@@ -1,5 +1,7 @@
 # Changes Workbench
 
+[![Build VSIX](https://github.com/madmax-dev-br/changes-workbench/actions/workflows/vsix.yml/badge.svg)](https://github.com/madmax-dev-br/changes-workbench/actions/workflows/vsix.yml)
+
 A focused review workspace for VS Code and Cursor: an IntelliJ-inspired change tree, one reusable diff, line history, and on-demand Kotlin/Java navigation.
 
 ## Install
@@ -7,6 +9,12 @@ A focused review workspace for VS Code and Cursor: an IntelliJ-inspired change t
 Run **Extensions: Install from VSIX** and select `changes-workbench.vsix`. Open a Git folder, then run **Changes: Open Workbench** (`⌘9` / `⌘0` on macOS, `Alt+9` / `Alt+0` elsewhere).
 
 The workbench reviews files without staging, committing, discarding, or saving them. Use **Open in editor** to edit. All changes compares HEAD to the current editor buffer, including unsaved edits. Staged compares HEAD to the index; unstaged compares the index to the current buffer.
+
+## Download a GitHub build
+
+Open [Actions → Build VSIX](https://github.com/madmax-dev-br/changes-workbench/actions/workflows/vsix.yml), select a successful run, and download its `changes-workbench-<version>-<commit>` artifact. Extract the ZIP and install `changes-workbench-<version>.vsix` using **Extensions: Install from VSIX**. A SHA-256 checksum is included. Sign in with access to this private repository to download artifacts.
+
+The workflow runs on pushes to `main`, pull requests targeting `main`, and **Run workflow**. It uses Node.js 22, installs the lockfile with `npm ci`, builds and typechecks the extension, runs the Git/navigation/server lifecycle tests, verifies the packaged assets, and retains the VSIX artifact for 30 days. Browser, desktop and real language-server tests remain separate validation commands documented below.
 
 ## IntelliJ shortcuts and colors
 
