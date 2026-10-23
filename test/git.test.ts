@@ -69,6 +69,18 @@ test("new, deleted, renamed, binary and unusual paths are preserved", async (t) 
   );
   assert.equal((await service.snapshot("binary.dat")).binary, true);
   assert.equal((await service.snapshot(unusual)).original, "");
+  assert.equal((await service.snapshot(unusual, "unstaged")).original, "");
+  git("add", "--", unusual);
+  assert.equal(
+    (await service.snapshot(unusual, "staged")).current,
+    "fun added() = true\n",
+  );
+  git("commit", "-m", "commit unusual filename");
+  await fs.writeFile(path.join(root, unusual), "fun added() = false\n");
+  assert.equal(
+    (await service.snapshot(unusual)).original,
+    "fun added() = true\n",
+  );
 });
 test("unborn repository and untracked blame are supported", async (t) => {
   const { root } = await repo();
