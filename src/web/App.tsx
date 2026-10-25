@@ -13,6 +13,7 @@ import type {
   BlameLine,
   Navigation,
 } from "../shared";
+import { displayPath } from "../shared";
 import { Diff, type DiffHandle } from "./Diff";
 import { request, vscode } from "./rpc";
 import type { editor } from "monaco-editor";
@@ -725,6 +726,7 @@ export default function App() {
                 viewStates={viewStates.current}
                 theme={theme}
                 intellijKeymap={state?.intellijKeymap ?? true}
+                root={state?.repo.root ?? ""}
               />
             ) : (
               <div className="empty">
@@ -787,8 +789,8 @@ export default function App() {
                         }
                       >
                         <strong>{s.name}</strong>
-                        <span>
-                          {s.path}:{s.line + 1}
+                        <span title={s.path}>
+                          {displayPath(s.path, state?.repo.root)}:{s.line + 1}
                         </span>
                         <Icon name="external" size={13} />
                       </button>

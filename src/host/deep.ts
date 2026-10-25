@@ -490,10 +490,12 @@ export class DeepManager {
         : locations
           ? [locations]
           : [];
-      const signature =
-        documentation.match(/`{3,}[^\n]*\n([\s\S]*?)\n`{3,}/)?.[1] ??
-        documentation.split("\n")[0] ??
-        word;
+      const fenced = documentation.match(/`{3,}[^\n]*\n([\s\S]*?)\n`{3,}/)?.[1];
+      const signature = fenced ?? documentation.split("\n")[0] ?? word;
+      const prose = cleanDocumentation(
+        documentation,
+        fenced ? undefined : signature,
+      );
       return {
         word,
         confidence: result.length ? "deep" : "none",
@@ -512,7 +514,7 @@ export class DeepManager {
             scopeStart: 0,
             scopeEnd: 0,
             signature: signature || uri,
-            documentation,
+            documentation: prose,
           };
         }),
       };
@@ -604,6 +606,23 @@ export async function sourceRoots(
       r + "/",
     ),
   }));
+}
+/**
+ * Plain prose from server hover markdown: code blocks (shown as the signature) and a repeated
+ * signature line are dropped, links keep their text.
+ */
+export function cleanDocumentation(markdown: string, signature?: string) {
+  let lines = markdown
+    .replace(/(`{3,})[^\n]*\n[\s\S]*?\n\1`*/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/(\*{1,2}|_{1,2})([^*_\n]+)\1/g, "$2")
+    .split("\n");
+  if (signature && lines[0]?.trim() === signature.trim())
+    lines = lines.slice(1);
+  return lines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 async function readHead(file: string) {
   const handle = await fs.open(file, "r");

@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DeepManager, globToRegExp, sourceRoots } from "../src/host/deep";
+import {
+  DeepManager,
+  cleanDocumentation,
+  globToRegExp,
+  sourceRoots,
+} from "../src/host/deep";
+import { displayPath } from "../src/shared";
 test("deep analysis is explicit, syncs buffers and stops its owned server", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "changes-deep-"));
   const server = path.join(root, "server.cjs"),
@@ -219,4 +225,42 @@ else if(message.method==='shutdown')write({id:message.id,result:null});else if(m
   const result = await manager.navigate("java", "A.java", "class A {}", 0, 6);
   assert.equal(result.candidates.length, 0);
   assert.match(result.note ?? "", /java index is still building/);
+});
+test("server hover markdown becomes plain documentation", () => {
+  assert.equal(
+    cleanDocumentation(
+      "Returns a greeting.\n````kotlin\nfun greeting(): String\n````\n",
+    ),
+    "Returns a greeting.",
+  );
+  assert.equal(
+    cleanDocumentation("````kotlin\nfun cents(value: Double): Double\n````\n"),
+    "",
+  );
+  assert.equal(
+    cleanDocumentation(
+      "String Demo.greeting()\n\nReturns a greeting.\n\nSource: *[changes-test](file:///repo/src/Demo.java#3)*",
+      "String Demo.greeting()",
+    ),
+    "Returns a greeting.\n\nSource: changes-test",
+  );
+});
+test("definition paths display relative to the repository", () => {
+  assert.equal(
+    displayPath("file:///Users/me/My%20Repo/app/src/A.kt", "/Users/me/My Repo"),
+    "app/src/A.kt",
+  );
+  assert.equal(displayPath("app/src/A.kt", "/Users/me/repo"), "app/src/A.kt");
+  assert.equal(
+    displayPath("file:///opt/jdk/src/String.java", "/Users/me/repo"),
+    "/opt/jdk/src/String.java",
+  );
+  assert.equal(
+    displayPath("file:///C:/work/repo/A.java", "C:\\work\\repo"),
+    "A.java",
+  );
+  assert.equal(
+    displayPath("jar:file:///lib.jar!/A.class", "/repo"),
+    "jar:file:///lib.jar!/A.class",
+  );
 });

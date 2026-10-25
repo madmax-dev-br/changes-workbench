@@ -14,6 +14,7 @@ import "monaco-editor/esm/vs/basic-languages/java/java.contribution";
 import "monaco-editor/esm/vs/basic-languages/xml/xml.contribution";
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution";
 import type { Snapshot, BlameLine, Navigation } from "../shared";
+import { displayPath } from "../shared";
 import { request, vscode } from "./rpc";
 import palettes from "../palettes.json";
 declare global {
@@ -96,6 +97,7 @@ interface Props {
   viewStates: Map<string, monaco.editor.IDiffEditorViewState>;
   theme: string;
   intellijKeymap: boolean;
+  root: string;
 }
 export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
   const mount = useRef<HTMLDivElement>(null);
@@ -258,7 +260,7 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
             const contents: monaco.IMarkdownString[] = [];
             for (const s of nav.candidates.slice(0, 3)) {
               contents.push({
-                value: `\`\`\`${language}\n${s.signature}\n\`\`\`\n${escapeMarkdown(s.documentation)}\n\n${escapeMarkdown(s.path)}:${s.line + 1}`,
+                value: `\`\`\`${language}\n${s.signature}\n\`\`\`\n${escapeMarkdown(s.documentation)}\n\n${escapeMarkdown(displayPath(s.path, p.root))}:${s.line + 1}`,
               });
             }
             if (nav.note) contents.push({ value: escapeMarkdown(nav.note) });

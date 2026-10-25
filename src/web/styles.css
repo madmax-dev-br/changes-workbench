@@ -731,6 +731,7 @@ footer button {
   font-size: 11px;
   color: var(--muted);
   line-height: 1.6;
+  white-space: pre-line;
 }
 .peek-note {
   padding: 0 12px;

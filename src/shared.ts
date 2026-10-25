@@ -115,6 +115,22 @@ export interface EventMessage {
   event: "state" | "command" | "refresh";
   data: unknown;
 }
+/** A definition location for display: relative to the repository when it lies inside it. */
+export function displayPath(location: string, root = "") {
+  let file = location;
+  if (/^file:\/\//i.test(location))
+    try {
+      file = decodeURIComponent(new URL(location).pathname).replace(
+        /^\/([A-Za-z]:)/,
+        "$1",
+      );
+    } catch {}
+  file = file.replace(/\\/g, "/");
+  const base = root.replace(/\\/g, "/").replace(/\/$/, "");
+  return base && file.startsWith(`${base}/`)
+    ? file.slice(base.length + 1)
+    : file;
+}
 export const languageOf = (path: string) =>
   path.endsWith(".kt") || path.endsWith(".kts")
     ? "kotlin"
