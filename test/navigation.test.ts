@@ -82,3 +82,72 @@ test("edited buffers invalidate parser cache and cancellation is respected", asy
     /Cancelled/,
   );
 });
+test("imported files are found by name and package path", async (t) => {
+  const { root, nav } = await setup();
+  t.after(async () => {
+    nav.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const put = async (file: string, text: string) => {
+    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await fs.writeFile(path.join(root, file), text);
+  };
+  await put(
+    "src/main/kotlin/shop/model/Order.kt",
+    "package shop.model\nclass Order\n",
+  );
+  await put("src/main/kotlin/other/Order.kt", "package other\nclass Order\n");
+  await put(
+    "src/main/java/shop/pay/Gateway.java",
+    "package shop.pay;\npublic interface Gateway {}\n",
+  );
+  await put("src/main/kotlin/shop/Unused.kt", "package shop\nclass Unused\n");
+  const source =
+    "package shop.service\n\nimport shop.model.Order\nimport shop.pay.Gateway\nimport shop.util.*\nimport kotlin.math.max\n\nclass Service(val g: Gateway) { fun run(o: Order) = o }\n";
+  assert.deepEqual(
+    (
+      await nav.importedFiles("src/main/kotlin/shop/service/Service.kt", source)
+    ).sort(),
+    [
+      "src/main/java/shop/pay/Gateway.java",
+      "src/main/kotlin/shop/model/Order.kt",
+    ],
+  );
+});
+test("related files cover targets, imports and packages in priority order", async (t) => {
+  const { root, nav } = await setup();
+  t.after(async () => {
+    nav.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const put = async (file: string, text: string) => {
+    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await fs.writeFile(path.join(root, file), text);
+  };
+  const k = "src/main/kotlin/shop/";
+  await put(k + "model/Order.kt", "package shop.model\nclass Order\n");
+  await put(
+    k + "pricing/Calculator.kt",
+    "package shop.pricing\nimport shop.tax.Tax\nclass Calculator(val tax: Tax, val p: Policy)\n",
+  );
+  await put(
+    k + "pricing/Policy.kt",
+    "package shop.pricing\ninterface Policy\n",
+  );
+  await put(k + "tax/Tax.kt", "package shop.tax\nclass Tax\n");
+  await put(k + "service/Helper.kt", "package shop.service\nclass Helper\n");
+  const source =
+    "package shop.service\nimport shop.model.Order\nclass Service { fun run(o: Order) = o }\n";
+  await put(k + "service/Service.kt", source);
+  const related = await nav.relatedFiles(k + "service/Service.kt", source, [
+    k + "pricing/Calculator.kt",
+    "file:///elsewhere/Lib.kt",
+  ]);
+  assert.deepEqual(related, [
+    k + "pricing/Calculator.kt",
+    k + "model/Order.kt",
+    k + "service/Helper.kt",
+    k + "tax/Tax.kt",
+    k + "pricing/Policy.kt",
+  ]);
+});

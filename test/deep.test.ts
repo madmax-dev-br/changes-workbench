@@ -125,23 +125,34 @@ test("watcher globs match LSP patterns", () => {
     ),
   );
 });
-test("deep navigation waits for indexing and forwards watched files", async (t) => {
+test("files opened during indexing are prioritized and watched files forwarded", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "changes-index-"));
   const server = path.join(root, "server.cjs"),
     trace = path.join(root, "trace.jsonl");
+  // Like Kotlin LSP: before the import finishes, only files opened by the client resolve.
   await fs.writeFile(
     server,
     `
 const fs=require('fs');let buffer=Buffer.alloc(0);const trace=${JSON.stringify(trace)};
 const write=(m)=>{const json=JSON.stringify({jsonrpc:'2.0',...m});process.stdout.write('Content-Length: '+Buffer.byteLength(json)+'\\r\\n\\r\\n'+json);};
-let ready=false;
+let ready=false;const open=new Set();
 process.stdin.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const length=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+length)return;const message=JSON.parse(buffer.subarray(end+4,end+4+length));buffer=buffer.subarray(end+4+length);fs.appendFileSync(trace,JSON.stringify(message)+'\\n');
+const target=message.params&&message.params.textDocument&&message.params.textDocument.uri.replace(/Main\\.kt$/,'Target.kt');
 if(message.method==='initialize')write({id:message.id,result:{capabilities:{definitionProvider:true,experimental:{workspaceImport:true}}}});
-else if(message.method==='initialized'){write({id:99,method:'client/registerCapability',params:{registrations:[{id:'w',method:'workspace/didChangeWatchedFiles',registerOptions:{watchers:[{globPattern:'**/*.kt'}]}}]}});setTimeout(()=>{ready=true;write({method:'intellij/workspaceImportState',params:{phase:'FINISHED'}});},400);}
-else if(message.method==='textDocument/definition')write({id:message.id,result:ready?[{uri:message.params.textDocument.uri,range:{start:{line:0,character:0},end:{line:0,character:1}}}]:[]});
+else if(message.method==='initialized'){write({id:99,method:'client/registerCapability',params:{registrations:[{id:'w',method:'workspace/didChangeWatchedFiles',registerOptions:{watchers:[{globPattern:'**/*.kt'}]}}]}});setTimeout(()=>{ready=true;write({method:'intellij/workspaceImportState',params:{phase:'FINISHED'}});},1500);}
+else if(message.method==='textDocument/didOpen')open.add(message.params.textDocument.uri);
+else if(message.method==='textDocument/didClose')open.delete(message.params.textDocument.uri);
+else if(message.method==='textDocument/definition')write({id:message.id,result:ready||open.has(target)?[{uri:target,range:{start:{line:1,character:6},end:{line:1,character:12}}}]:[]});
 else if(message.method==='shutdown')write({id:message.id,result:null});else if(message.method==='exit')process.exit(0);}});`,
   );
-  await fs.writeFile(path.join(root, "Main.kt"), "package app\nclass Main\n");
+  await fs.writeFile(
+    path.join(root, "Main.kt"),
+    "package app\nval t = Target()\n",
+  );
+  await fs.writeFile(
+    path.join(root, "Target.kt"),
+    "package app\nclass Target\n",
+  );
   const statuses: string[] = [];
   const manager = new DeepManager(
     root,
@@ -150,31 +161,73 @@ else if(message.method==='shutdown')write({id:message.id,result:null});else if(m
     (s) => statuses.push(s),
     1,
     () => {},
-    async () => ["Main.kt"],
+    async () => ["Main.kt", "Target.kt"],
   );
   t.after(async () => {
     await manager.stop();
     await fs.rm(root, { recursive: true, force: true });
   });
+  const events = async () =>
+    (await fs.readFile(trace, "utf8"))
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
   manager.enable();
-  const result = await manager.navigate(
+  const text = "package app\nval t = Target()\n";
+  const unresolved = await manager.navigate("kotlin", "Main.kt", text, 1, 10);
+  assert.equal(unresolved.confidence, "none");
+  assert.match(unresolved.note ?? "", /index is still building/);
+  assert.ok(manager.indexing("kotlin"));
+  const started = Date.now();
+  const prioritized = await manager.navigate(
     "kotlin",
     "Main.kt",
-    "class Main",
-    0,
-    7,
+    text,
+    1,
+    10,
+    undefined,
+    ["Target.kt", "Main.kt"],
   );
-  assert.equal(result.confidence, "deep", "waited for the import to finish");
-  assert.ok(statuses.some((s) => s.includes("kotlin indexing")));
+  assert.equal(
+    prioritized.confidence,
+    "deep",
+    "resolved before the index finished",
+  );
+  assert.ok(prioritized.candidates[0].path.endsWith("/Target.kt"));
+  assert.ok(Date.now() - started < 1000, "did not wait for the index");
+  assert.ok(!statuses.includes("Deep · kotlin ready"));
+  const trail = (await events()).map((e) =>
+    e.method === "textDocument/didOpen"
+      ? `open ${e.params.textDocument.uri.split("/").at(-1)}`
+      : e.method,
+  );
+  assert.ok(
+    trail.lastIndexOf("open Target.kt") <
+      trail.lastIndexOf("textDocument/definition"),
+  );
+  assert.ok(
+    trail.indexOf("initialized") <
+      trail.findIndex((m) => m.startsWith("open ")),
+    "documents are sent only after initialization",
+  );
+  for (let i = 0; i < 40 && manager.indexing("kotlin"); i++)
+    await new Promise((r) => setTimeout(r, 100));
   assert.ok(statuses.includes("Deep · kotlin ready"));
+  assert.ok(statuses.some((s) => s.includes("kotlin indexing")));
+  // A changed file stops overriding the disk, and watched changes are forwarded.
+  manager.fileChanged(path.join(root, "Target.kt"), 2);
   manager.fileChanged(path.join(root, "New.kt"), 1);
   manager.fileChanged(path.join(root, "notes.txt"), 2);
   await new Promise((r) => setTimeout(r, 600));
-  const events = (await fs.readFile(trace, "utf8"))
-    .trim()
-    .split("\n")
-    .map((l) => JSON.parse(l));
-  const init = events.find((e) => e.method === "initialize");
+  const all = await events();
+  assert.ok(
+    all.some(
+      (e) =>
+        e.method === "textDocument/didClose" &&
+        e.params.textDocument.uri.endsWith("/Target.kt"),
+    ),
+  );
+  const init = all.find((e) => e.method === "initialize");
   assert.equal(init.params.capabilities.window.workDoneProgress, true);
   assert.equal(
     init.params.initializationOptions.projects[0].type,
@@ -188,14 +241,61 @@ else if(message.method==='shutdown')write({id:message.id,result:null});else if(m
     workspace.modules[0].contentRoots[0].sourceRoots.map((r: any) => r.path),
     [root],
   );
-  const watched = events.filter(
+  const watched = all.filter(
     (e) => e.method === "workspace/didChangeWatchedFiles",
   );
   assert.equal(watched.length, 1);
   assert.deepEqual(
-    watched[0].params.changes.map((c: any) => c.uri.split("/").at(-1)),
-    ["New.kt"],
+    watched[0].params.changes.map((c: any) => c.uri.split("/").at(-1)).sort(),
+    ["New.kt", "Target.kt"],
   );
+});
+test("prioritized files are read only inside the repository", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "changes-priority-"));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "changes-outside-"));
+  const server = path.join(root, "server.cjs"),
+    trace = path.join(root, "trace.jsonl");
+  await fs.writeFile(
+    server,
+    `const fs=require('fs');let buffer=Buffer.alloc(0);const write=(m)=>{const json=JSON.stringify({jsonrpc:'2.0',...m});process.stdout.write('Content-Length: '+Buffer.byteLength(json)+'\\r\\n\\r\\n'+json);};
+process.stdin.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const length=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+length)return;const message=JSON.parse(buffer.subarray(end+4,end+4+length));buffer=buffer.subarray(end+4+length);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(message)+'\\n');
+if(message.method==='initialize')write({id:message.id,result:{capabilities:{}}});else if(message.method==='shutdown')write({id:message.id,result:null});else if(message.method==='exit')process.exit(0);}});`,
+  );
+  await fs.writeFile(path.join(outside, "Secret.kt"), "class Secret\n");
+  await fs.symlink(path.join(outside, "Secret.kt"), path.join(root, "Link.kt"));
+  await fs.writeFile(path.join(root, "Ok.kt"), "class Ok\n");
+  const manager = new DeepManager(
+    root,
+    path.join(root, "storage"),
+    () => ({ command: process.execPath, args: [server] }),
+    () => {},
+    1,
+    () => {},
+    async () => ["Ok.kt"],
+  );
+  t.after(async () => {
+    await manager.stop();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+  await manager.prioritize("kotlin", "Ok.kt");
+  assert.equal(
+    await fs.readFile(trace, "utf8").catch(() => ""),
+    "",
+    "nothing while disabled",
+  );
+  manager.enable();
+  await manager.prioritize("kotlin", "Ok.kt");
+  await manager.prioritize("kotlin", "Link.kt");
+  await manager.prioritize("kotlin", "../outside.kt");
+  await new Promise((r) => setTimeout(r, 200));
+  const opened = (await fs.readFile(trace, "utf8"))
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l))
+    .filter((e) => e.method === "textDocument/didOpen")
+    .map((e) => e.params.textDocument.uri.split("/").at(-1));
+  assert.deepEqual(opened, ["Ok.kt"]);
 });
 test("navigation falls back with a note while the index is building", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "changes-slow-"));

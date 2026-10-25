@@ -252,6 +252,15 @@ export default function App() {
         }
       }
       if (m.event === "refresh") void perform("refresh");
+      if (m.event === "status") {
+        const { root, deepStatus, mode } = m.data as Pick<
+          ViewState,
+          "deepStatus" | "mode"
+        > & { root: string };
+        setState((s) =>
+          s && s.repo.root === root ? { ...s, deepStatus, mode } : s,
+        );
+      }
       if (m.event === "command") {
         switch (m.data) {
           case "nextFile":

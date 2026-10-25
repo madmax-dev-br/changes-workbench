@@ -211,6 +211,18 @@ class Workbench {
         if (e.document.uri.scheme === "file") this.changed();
       }),
       vscode.workspace.onDidSaveTextDocument(() => this.changed()),
+      vscode.window.onDidChangeActiveTextEditor((editor) => {
+        const document = editor?.document;
+        if (document?.uri.scheme !== "file") return;
+        void this.serviceFor(document.uri.fsPath).then((service) => {
+          if (service)
+            this.prioritize(
+              service,
+              path.relative(service.git.root, document.uri.fsPath),
+              document.getText(),
+            );
+        });
+      }),
       vscode.window.onDidChangeWindowState((e) => {
         if (e.focused) this.changed();
       }),
@@ -286,7 +298,12 @@ class Workbench {
       (message) => {
         this.deepStatus = message;
         this.status.tooltip = `Changes Workbench · ${message}`;
-        this.send("refresh", {});
+        // Only the status line changes: a full refresh would reset an open definition preview.
+        this.send("status", {
+          root,
+          deepStatus: message,
+          mode: deep.enabled ? "deep" : "light",
+        });
       },
       cfg.get("deepIdleMinutes", 10),
       (message) => this.log.appendLine(message),
@@ -533,6 +550,7 @@ class Workbench {
         if (service !== this.current || scope !== this.scope)
           throw new Error("View changed");
         this.snapshots.set(file, snapshot);
+        this.prioritize(service, file, snapshot.current);
         return snapshot;
       }
       case "blame": {
@@ -672,15 +690,40 @@ class Workbench {
         note: "Lightweight navigation supports Kotlin and Java.",
       };
     let note: string | undefined;
+    let light: Navigation | undefined;
     if (service.deep.enabled) {
       try {
+        const language = languageOf(file);
+        // While the index builds, the server resolves only what it has open: send the likely
+        // definitions and the files they depend on first.
+        let hints: string[] = [];
+        if (service.deep.indexing(language)) {
+          const quiet = <T>(work: Promise<T>) =>
+            work.catch((e) => {
+              if (signal?.aborted) throw e;
+              return undefined;
+            });
+          light = await quiet(
+            service.navigation.resolve(file, text, line, column, signal),
+          );
+          hints =
+            (await quiet(
+              service.navigation.relatedFiles(
+                file,
+                text,
+                light?.candidates.map((c) => c.path) ?? [],
+                signal,
+              ),
+            )) ?? [];
+        }
         const result = await service.deep.navigate(
-          languageOf(file),
+          language,
           file,
           text,
           line,
           column,
           signal,
+          hints,
         );
         this.deepStatus = service.deep.statusText;
         if (result.candidates.length) return result;
@@ -691,7 +734,7 @@ class Workbench {
         this.log.appendLine(String(e));
       }
     }
-    const light = await service.navigation.resolve(
+    light ??= await service.navigation.resolve(
       file,
       text,
       line,
@@ -699,6 +742,15 @@ class Workbench {
       signal,
     );
     return note ? { ...light, note: light.note ?? note } : light;
+  }
+  /** Let the deep server analyze a file the user is looking at before the full index is done. */
+  private prioritize(service: Services, file: string, text?: string) {
+    const language = languageOf(file);
+    if (!service.deep.enabled || !["java", "kotlin"].includes(language)) return;
+    if (typeof text !== "string") return;
+    void service.deep
+      .prioritize(language, file, text)
+      .catch((e) => this.log.appendLine(String(e)));
   }
   private locationUri(file: string, root = this.root) {
     return /^[a-z][\w+.-]*:\/\//i.test(file)

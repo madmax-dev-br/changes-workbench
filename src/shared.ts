@@ -112,7 +112,7 @@ export interface ResponseMessage {
 }
 export interface EventMessage {
   type: "event";
-  event: "state" | "command" | "refresh";
+  event: "state" | "command" | "refresh" | "status";
   data: unknown;
 }
 /** A definition location for display: relative to the repository when it lies inside it. */

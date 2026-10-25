@@ -9,7 +9,7 @@ import {
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { inside } from "./git";
+import { hash, inside } from "./git";
 import { findExecutable } from "./dependencies";
 import { languageOf, type Navigation } from "../shared";
 export interface DeepConfig {
@@ -24,7 +24,7 @@ interface KotlinWorkspace {
 interface Session {
   connection: MessageConnection;
   child: ChildProcess;
-  documents: Map<string, number>;
+  documents: Map<string, { version: number; digest: string }>;
   language: string;
   supportsHover?: boolean;
   indexing: boolean;
@@ -61,7 +61,7 @@ export class DeepManager {
     private idleMinutes = 10,
     private log: (message: string) => void = () => {},
     private listFiles: () => Promise<string[]> = async () => [],
-    private indexWaitMs = 10000,
+    private indexingTimeoutMs = 4000,
   ) {}
   private report(message: string) {
     this.statusText = message;
@@ -113,10 +113,11 @@ export class DeepManager {
   }
   private async session(language: string): Promise<Session> {
     if (!this.enabled) throw new Error("Deep analysis is disabled");
-    const running = this.sessions.get(language);
-    if (running) return running;
+    // A session is registered before `initialized`; documents sent earlier are ignored by servers.
     const existing = this.starting.get(language);
     if (existing) return existing;
+    const running = this.sessions.get(language);
+    if (running) return running;
     const generation = this.generation;
     const promise = this.launch(language, generation).finally(() => {
       if (this.starting.get(language) === promise)
@@ -375,6 +376,10 @@ export class DeepManager {
     const events = [...this.events];
     this.events.clear();
     for (const session of this.sessions.values()) {
+      if (this.starting.has(session.language)) continue;
+      // An open document overrides the disk; let the server read the new content.
+      for (const [file] of events)
+        await this.close(session, pathToFileURL(file).toString());
       const changes = events
         .filter(([file]) =>
           session.watchers.some((w) => w.test(file.split(path.sep).join("/"))),
@@ -406,6 +411,79 @@ export class DeepManager {
       }
     }
   }
+  /** Whether the server for a language is running or starting and has not finished indexing. */
+  indexing(language: string) {
+    return (
+      this.enabled &&
+      (this.starting.has(language) ||
+        Boolean(this.sessions.get(language)?.indexing))
+    );
+  }
+  /**
+   * Open a file on the server so it is analyzed ahead of the background index: the file being
+   * viewed, and likely definition targets while the index is still building.
+   */
+  async prioritize(language: string, file: string, text?: string) {
+    if (!this.enabled) return;
+    const starting = this.starting.get(language);
+    let session = starting
+      ? await starting.catch(() => undefined)
+      : this.sessions.get(language);
+    if (!session) {
+      const command = this.config(language).command;
+      if (!command || !(await findExecutable(command))) return;
+      session = await this.session(language);
+    }
+    const full = path.resolve(this.root, file);
+    if (!inside(this.root, full)) return;
+    text ??= await readSource(this.root, full);
+    if (text === undefined) return;
+    await this.sync(session, full, text);
+  }
+  private async close(session: Session, uri: string) {
+    if (!session.documents.delete(uri)) return;
+    try {
+      await session.connection.sendNotification("textDocument/didClose", {
+        textDocument: { uri },
+      });
+    } catch {}
+  }
+  private async sync(session: Session, full: string, text: string) {
+    const uri = pathToFileURL(full).toString();
+    const open = session.documents.get(uri);
+    const digest = hash(text);
+    const version = (open?.version ?? 0) + 1;
+    // Resending unchanged text makes the server discard analysis it is building.
+    if (open?.digest === digest) {
+      session.documents.delete(uri);
+      session.documents.set(uri, open);
+      return uri;
+    }
+    if (open)
+      await session.connection.sendNotification("textDocument/didChange", {
+        textDocument: { uri, version },
+        contentChanges: [{ text }],
+      });
+    else
+      await session.connection.sendNotification("textDocument/didOpen", {
+        textDocument: {
+          uri,
+          languageId: languageOf(full) === "java" ? "java" : "kotlin",
+          version,
+          text,
+        },
+      });
+    session.documents.delete(uri);
+    session.documents.set(uri, { version, digest });
+    while (session.documents.size > 32) {
+      const oldest = session.documents.keys().next().value!;
+      session.documents.delete(oldest);
+      await session.connection.sendNotification("textDocument/didClose", {
+        textDocument: { uri: oldest },
+      });
+    }
+    return uri;
+  }
   async navigate(
     language: string,
     file: string,
@@ -413,6 +491,7 @@ export class DeepManager {
     line: number,
     column: number,
     signal?: AbortSignal,
+    hints: string[] = [],
   ): Promise<Navigation> {
     this.touch();
     const session = await this.session(language);
@@ -421,38 +500,18 @@ export class DeepManager {
     const word =
       (sourceLine.slice(0, column).match(/[\w$]+$/)?.[0] ?? "") +
       (sourceLine.slice(column).match(/^[\w$]+/)?.[0] ?? "");
-    if (
-      session.indexing &&
-      !(await settles(session.ready, this.indexWaitMs, signal))
-    ) {
-      if (signal?.aborted) throw new Error("Cancelled");
-      return {
-        word,
-        candidates: [],
-        confidence: "none",
-        note: `The ${language} index is still building; showing lightweight results.`,
-      };
-    }
-    const uri = pathToFileURL(path.resolve(this.root, file)).toString();
-    const version = (session.documents.get(uri) ?? 0) + 1;
-    if (session.documents.has(uri))
-      await session.connection.sendNotification("textDocument/didChange", {
-        textDocument: { uri, version },
-        contentChanges: [{ text }],
-      });
-    else
-      await session.connection.sendNotification("textDocument/didOpen", {
-        textDocument: { uri, languageId: language, version, text },
-      });
-    session.documents.delete(uri);
-    session.documents.set(uri, version);
-    while (session.documents.size > 32) {
-      const oldest = session.documents.keys().next().value!;
-      session.documents.delete(oldest);
-      await session.connection.sendNotification("textDocument/didClose", {
-        textDocument: { uri: oldest },
-      });
-    }
+    const indexing = session.indexing;
+    // While indexing, open the likely targets so the server resolves them before the full index.
+    if (indexing)
+      for (const hint of [...new Set(hints)].slice(0, 24)) {
+        if (signal?.aborted) throw new Error("Cancelled");
+        if (language === "java" && languageOf(hint) !== "java") continue;
+        if (path.resolve(this.root, hint) === path.resolve(this.root, file))
+          continue;
+        await this.prioritize(language, hint).catch(() => {});
+      }
+    const source = path.resolve(this.root, file);
+    const uri = await this.sync(session, source, text);
     const token = new CancellationTokenSource();
     const cancel = () => token.cancel();
     signal?.addEventListener("abort", cancel, { once: true });
@@ -473,8 +532,11 @@ export class DeepManager {
           { textDocument: { uri }, position: { line, character: column } },
           token.token,
         ),
-        8000,
-      );
+        indexing ? this.indexingTimeoutMs : 8000,
+      ).catch((e) => {
+        if (indexing && !signal?.aborted) return [];
+        throw e;
+      });
       const hover = await hoverRequest;
       const content = hover?.contents;
       const documentation = (
@@ -499,6 +561,10 @@ export class DeepManager {
       return {
         word,
         confidence: result.length ? "deep" : "none",
+        note:
+          !result.length && indexing
+            ? `The ${language} index is still building; this file and its likely definitions were prioritized. Showing lightweight results.`
+            : undefined,
         candidates: result.map((l: any) => {
           const uri = l.targetUri ?? l.uri;
           const range = l.targetSelectionRange ?? l.range;
@@ -624,6 +690,14 @@ export function cleanDocumentation(markdown: string, signature?: string) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+async function readSource(root: string, file: string) {
+  try {
+    const real = await fs.realpath(file);
+    if (!inside(await fs.realpath(root), real)) return;
+    if ((await fs.stat(real)).size > 2 * 1024 * 1024) return;
+    return await fs.readFile(real, "utf8");
+  } catch {}
+}
 async function readHead(file: string) {
   const handle = await fs.open(file, "r");
   try {
@@ -678,27 +752,6 @@ async function exists(file: string) {
     () => true,
     () => false,
   );
-}
-/** Wait for a promise up to `ms`; false when it did not settle in time or the request was cancelled. */
-function settles(
-  promise: Promise<unknown>,
-  ms: number,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const done = (value: boolean) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      resolve(value);
-    };
-    const abort = () => done(false);
-    const timer = setTimeout(() => done(false), ms);
-    signal?.addEventListener("abort", abort, { once: true });
-    promise.then(
-      () => done(true),
-      () => done(false),
-    );
-  });
 }
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {

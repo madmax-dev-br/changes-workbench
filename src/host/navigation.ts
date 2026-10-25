@@ -97,6 +97,56 @@ export class Navigator {
     }
     return parsed;
   }
+  /** Repository files declaring the types a file imports, matched by file name and package path. */
+  async importedFiles(file: string, text: string, signal?: AbortSignal) {
+    const parsed = await this.parse(file, text, signal);
+    const wanted = new Map<string, string>();
+    for (const i of parsed.imports) {
+      const parts = i.path.split(".");
+      const name = parts.at(-1)!;
+      if (name !== "*" && /^[A-Z]/.test(name))
+        wanted.set(name, parts.slice(0, -1).join("/"));
+    }
+    if (!wanted.size) return [];
+    const files = await this.listFiles();
+    return files.filter((f) => {
+      const name = path.basename(f).replace(/\.(kt|kts|java)$/, "");
+      const pkg = wanted.get(name);
+      return pkg !== undefined && path.dirname(f).endsWith(pkg);
+    });
+  }
+  /**
+   * Files a definition lookup in `file` depends on: the likely targets, then what the file and the
+   * targets import or share a package with (their types pick overloads and member receivers).
+   */
+  async relatedFiles(
+    file: string,
+    text: string,
+    targets: string[],
+    signal?: AbortSignal,
+  ) {
+    const files = await this.listFiles();
+    const siblings = (of: string) =>
+      files
+        .filter((f) => f !== of && path.dirname(f) === path.dirname(of))
+        .slice(0, 8);
+    const local = targets.filter((t) => !/^[a-z][\w+.-]*:/i.test(t));
+    const related = [
+      ...local,
+      ...(await this.importedFiles(file, text, signal)),
+      ...siblings(file),
+    ];
+    for (const target of local.slice(0, 4)) {
+      if (signal?.aborted) throw new Error("Cancelled");
+      const source = await this.read(target).catch(() => undefined);
+      if (source === undefined) continue;
+      related.push(
+        ...(await this.importedFiles(target, source, signal).catch(() => [])),
+        ...siblings(target),
+      );
+    }
+    return [...new Set(related)].filter((f) => f !== file).slice(0, 24);
+  }
   invalidateFiles() {
     this.files = undefined;
     this.answers.clear();
