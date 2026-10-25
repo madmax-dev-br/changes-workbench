@@ -6,3 +6,4 @@ dist/
 docs/layout-review/shots/
 test-results/
 assets/
+.DS_Store
