@@ -4,6 +4,7 @@ import {
   StreamMessageReader,
   StreamMessageWriter,
   type MessageConnection,
+  type MessageWriter,
   CancellationTokenSource,
 } from "vscode-jsonrpc/node";
 import * as fs from "node:fs/promises";
@@ -167,9 +168,22 @@ export class DeepManager {
       child.kill();
       throw new Error("Deep analysis stopped");
     }
+    // vscode-jsonrpc rethrows a failed request write from inside a Promise executor, an unhandled
+    // rejection when the server exits early. Swallow it here: the exit handler disposes the
+    // connection, which rejects the pending request instead.
+    const writer = new StreamMessageWriter(child.stdin!);
     const connection = createMessageConnection(
       new StreamMessageReader(child.stdout!),
-      new StreamMessageWriter(child.stdin!),
+      {
+        onError: writer.onError,
+        onClose: writer.onClose,
+        write: (message) =>
+          writer
+            .write(message)
+            .catch((e) => this.log(`[${language}] write failed: ${e}\n`)),
+        end: () => writer.end(),
+        dispose: () => writer.dispose(),
+      } satisfies MessageWriter,
     );
     let markReady = () => {};
     const ready = new Promise<void>((resolve) => (markReady = resolve));
