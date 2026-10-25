@@ -11,6 +11,8 @@ import {
   conf as kotlinConfiguration,
 } from "monaco-editor/esm/vs/basic-languages/kotlin/kotlin";
 import "monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css";
+// editor.api has no contributions; the hover one shows documentation and blame on mouse over.
+import "monaco-editor/esm/vs/editor/contrib/hover/browser/hoverContribution";
 import "monaco-editor/esm/vs/basic-languages/java/java.contribution";
 import "monaco-editor/esm/vs/basic-languages/xml/xml.contribution";
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution";

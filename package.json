@@ -1,10 +1,36 @@
 {
   "name": "changes-workbench",
   "displayName": "Changes Workbench",
-  "description": "A focused Git review workspace with on-demand Kotlin and Java navigation.",
+  "description": "IntelliJ-style change review for VS Code and Cursor: change tree, diff, Git blame in the gutter, and Kotlin/Java navigation with optional language-server indexing.",
   "version": "0.1.0",
-  "publisher": "local-workbench",
+  "publisher": "madmax-dev-br",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/madmax-dev-br/changes-workbench.git"
+  },
+  "homepage": "https://github.com/madmax-dev-br/changes-workbench#readme",
+  "bugs": {
+    "url": "https://github.com/madmax-dev-br/changes-workbench/issues"
+  },
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1E1F22",
+    "theme": "dark"
+  },
+  "pricing": "Free",
+  "keywords": [
+    "intellij",
+    "git",
+    "diff",
+    "code review",
+    "blame",
+    "changes",
+    "kotlin",
+    "java",
+    "keymap",
+    "darcula"
+  ],
   "engines": {
     "vscode": "^1.96.0"
   },
@@ -525,8 +551,8 @@
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository --out changes-workbench.vsix",
-    "vscode:prepublish": "npm run check",
+    "package": "vsce package --no-dependencies --out changes-workbench.vsix",
+    "vscode:prepublish": "npm run check && npm run build",
     "dev:web": "node scripts/dev-web.mjs",
     "test:web": "node scripts/test-web.mjs",
     "bench": "tsx scripts/benchmark.ts",

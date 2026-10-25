@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 export async function run() {
   const extension = vscode.extensions.getExtension(
-    "local-workbench.changes-workbench",
+    "madmax-dev-br.changes-workbench",
   );
   assert.ok(extension);
   await extension.activate();
