@@ -55,11 +55,12 @@ Screenshots and results are recorded under `docs/layout-review/`. Approval belon
 
 ## Publishing
 
-The extension is published to [Open VSX](https://open-vsx.org/), the registry Cursor, VSCodium and Windsurf use, under the `madmax-dev-br` namespace. Create an access token at open-vsx.org › Settings › Access Tokens and keep it in `OVSX_PAT`.
+The extension is published to [Open VSX](https://open-vsx.org/), the registry Cursor, VSCodium and Windsurf use, under the `madmax-dev-br` namespace. Copy `.env.example` to `.env` and paste an access token from open-vsx.org › Settings › Access Tokens into `OVSX_PAT`; `.env` is ignored by Git and never packaged. Then:
 
 ```sh
-npm run package
-npx ovsx publish changes-workbench.vsix -p "$OVSX_PAT"
+npm run publish:openvsx
 ```
+
+It packages the VSIX, creates the namespace on the first run, and publishes. The token is read from the environment, never passed as an argument.
 
 Bump `version` in `package.json` and add a `CHANGELOG.md` entry before each release; a version can be published only once.

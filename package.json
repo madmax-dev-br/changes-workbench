@@ -559,7 +559,8 @@
     "review": "node scripts/review-server.mjs",
     "test:desktop": "node scripts/test-desktop.mjs",
     "format": "prettier --write src test scripts package.json tsconfig.json",
-    "test:lsp": "tsx scripts/test-real-lsp.ts"
+    "test:lsp": "tsx scripts/test-real-lsp.ts",
+    "publish:openvsx": "npm run package && node scripts/publish-openvsx.mjs"
   },
   "dependencies": {
     "diff": "^8.0.0",
