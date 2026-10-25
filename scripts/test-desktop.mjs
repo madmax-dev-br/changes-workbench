@@ -20,7 +20,10 @@ await runTests({
   vscodeExecutablePath: executable,
   extensionDevelopmentPath: root,
   extensionTestsPath: path.resolve(".dev/desktop-test.cjs"),
-  extensionTestsEnv: { CHANGES_PROJECT_ROOT: root },
+  extensionTestsEnv: {
+    CHANGES_PROJECT_ROOT: root,
+    KOTLIN_LSP_COMMAND: process.env.KOTLIN_LSP_COMMAND,
+  },
   launchArgs: [
     fixture,
     "--disable-extensions",

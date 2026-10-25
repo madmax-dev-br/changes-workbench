@@ -204,9 +204,9 @@ class Workbench {
     const watcher = vscode.workspace.createFileSystemWatcher("**/*");
     this.disposables.push(
       watcher,
-      watcher.onDidCreate(() => this.changed()),
-      watcher.onDidDelete(() => this.changed()),
-      watcher.onDidChange(() => this.changed()),
+      watcher.onDidCreate((uri) => this.changed(uri, 1)),
+      watcher.onDidChange((uri) => this.changed(uri, 2)),
+      watcher.onDidDelete((uri) => this.changed(uri, 3)),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (e.document.uri.scheme === "file") this.changed();
       }),
@@ -290,6 +290,7 @@ class Workbench {
       },
       cfg.get("deepIdleMinutes", 10),
       (message) => this.log.appendLine(message),
+      () => navigation.listFiles(),
     );
     const service: Services = { git, navigation, deep, watchers: [] };
     this.services.set(root, service);
@@ -315,11 +316,14 @@ class Workbench {
       .sort((a, b) => b.length - a.length);
     return roots.length ? this.services.get(roots[0]) : undefined;
   }
-  private changed() {
+  private changed(uri?: vscode.Uri, type?: 1 | 2 | 3) {
     this.epoch++;
     this.snapshots.clear();
     this.nativeBlameCache.clear();
-    for (const s of this.services.values()) s.navigation.invalidateFiles();
+    for (const s of this.services.values()) {
+      s.navigation.invalidateFiles();
+      if (uri?.scheme === "file" && type) s.deep.fileChanged(uri.fsPath, type);
+    }
     clearTimeout(this.refreshTimer);
     if (this.panel)
       this.refreshTimer = setTimeout(
@@ -667,6 +671,7 @@ class Workbench {
         confidence: "none",
         note: "Lightweight navigation supports Kotlin and Java.",
       };
+    let note: string | undefined;
     if (service.deep.enabled) {
       try {
         const result = await service.deep.navigate(
@@ -677,14 +682,23 @@ class Workbench {
           column,
           signal,
         );
+        this.deepStatus = service.deep.statusText;
         if (result.candidates.length) return result;
+        note = result.note;
       } catch (e) {
         if (signal?.aborted) throw e;
         this.deepStatus = `Deep unavailable · ${String(e).slice(0, 100)}`;
         this.log.appendLine(String(e));
       }
     }
-    return service.navigation.resolve(file, text, line, column, signal);
+    const light = await service.navigation.resolve(
+      file,
+      text,
+      line,
+      column,
+      signal,
+    );
+    return note ? { ...light, note: light.note ?? note } : light;
   }
   private locationUri(file: string, root = this.root) {
     return /^[a-z][\w+.-]*:\/\//i.test(file)
