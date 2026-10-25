@@ -6,6 +6,8 @@ import path from "node:path";
 import {
   DeepManager,
   cleanDocumentation,
+  compareVersions,
+  findKotlinStdlib,
   globToRegExp,
   sourceRoots,
 } from "../src/host/deep";
@@ -60,23 +62,33 @@ process.stdin.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true)
   assert.ok(events.some((e) => e.method === "shutdown"));
   assert.equal(manager.enabled, false);
 });
-test("missing server fails cleanly and remains stoppable", async (t) => {
+test("missing server falls back with a note and remains stoppable", async (t) => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "changes-deep-missing-"),
   );
+  const statuses: string[] = [];
   const manager = new DeepManager(
     root,
     root,
-    () => ({ command: path.join(root, "missing"), args: [] }),
-    () => {},
+    (language) => ({
+      command:
+        language === "java" ? path.join(root, "missing") : "/usr/bin/false",
+      args: [],
+    }),
+    (s) => statuses.push(s),
   );
   t.after(async () => {
     await manager.stop();
     await fs.rm(root, { recursive: true, force: true });
   });
   manager.enable();
+  const result = await manager.navigate("java", "A.java", "class A {}", 0, 6);
+  assert.equal(result.candidates.length, 0);
+  assert.match(result.note ?? "", /No Java language server found/);
+  assert.ok(!statuses.some((s) => /ENOENT|unavailable/.test(s)));
+  // An installed launcher that fails still reports the failure.
   await assert.rejects(() =>
-    manager.navigate("java", "A.java", "class A {}", 0, 6),
+    manager.navigate("kotlin", "A.kt", "class A", 0, 6),
   );
   await manager.stop();
   assert.equal(manager.enabled, false);
@@ -162,6 +174,12 @@ else if(message.method==='shutdown')write({id:message.id,result:null});else if(m
     1,
     () => {},
     async () => ["Main.kt", "Target.kt"],
+    4000,
+    async () => ({
+      version: "2.1.21",
+      classes: "/cache/kotlin-stdlib-2.1.21.jar",
+      sources: "/cache/kotlin-stdlib-2.1.21-sources.jar",
+    }),
   );
   t.after(async () => {
     await manager.stop();
@@ -241,6 +259,21 @@ else if(message.method==='shutdown')write({id:message.id,result:null});else if(m
     workspace.modules[0].contentRoots[0].sourceRoots.map((r: any) => r.path),
     [root],
   );
+  assert.deepEqual(workspace.libraries, [
+    {
+      name: "kotlin-stdlib:2.1.21",
+      type: "COMPILE",
+      roots: [
+        { path: "/cache/kotlin-stdlib-2.1.21.jar" },
+        { path: "/cache/kotlin-stdlib-2.1.21-sources.jar", type: "SOURCES" },
+      ],
+    },
+  ]);
+  assert.deepEqual(workspace.modules[0].dependencies, [
+    { type: "moduleSource" },
+    { type: "library", name: "kotlin-stdlib:2.1.21", scope: "compile" },
+    { type: "inheritedSdk" },
+  ]);
   const watched = all.filter(
     (e) => e.method === "workspace/didChangeWatchedFiles",
   );
@@ -363,4 +396,127 @@ test("definition paths display relative to the repository", () => {
     displayPath("jar:file:///lib.jar!/A.class", "/repo"),
     "jar:file:///lib.jar!/A.class",
   );
+});
+test("kotlin-stdlib is found in the Gradle and Maven caches or KOTLIN_HOME", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "changes-stdlib-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const put = async (file: string) => {
+    await fs.mkdir(path.dirname(path.join(home, file)), { recursive: true });
+    await fs.writeFile(path.join(home, file), "");
+  };
+  assert.equal(await findKotlinStdlib({}, home), undefined);
+  await put("kotlin/lib/kotlin-stdlib.jar");
+  assert.deepEqual(
+    await findKotlinStdlib({ KOTLIN_HOME: path.join(home, "kotlin") }, home),
+    {
+      version: "KOTLIN_HOME",
+      classes: path.join(home, "kotlin/lib/kotlin-stdlib.jar"),
+      sources: undefined,
+    },
+  );
+  const gradle =
+    ".gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/";
+  await put(gradle + "1.9.20/a1/kotlin-stdlib-1.9.20.jar");
+  await put(gradle + "2.1.21/b2/kotlin-stdlib-2.1.21.jar");
+  await put(gradle + "2.1.21/c3/kotlin-stdlib-2.1.21-sources.jar");
+  await put(gradle + "2.2.0-RC/d4/kotlin-stdlib-2.2.0-RC.jar");
+  await put(
+    ".m2/repository/org/jetbrains/kotlin/kotlin-stdlib/2.0.0/kotlin-stdlib-2.0.0.jar",
+  );
+  assert.deepEqual(
+    await findKotlinStdlib({ KOTLIN_HOME: path.join(home, "kotlin") }, home),
+    {
+      version: "2.2.0-RC",
+      classes: path.join(
+        home,
+        gradle,
+        "2.2.0-RC/d4/kotlin-stdlib-2.2.0-RC.jar",
+      ),
+      sources: undefined,
+    },
+    "the newest cached version wins over KOTLIN_HOME",
+  );
+  await put(gradle + "2.2.0/e5/kotlin-stdlib-2.2.0.jar");
+  await put(gradle + "2.2.0/f6/kotlin-stdlib-2.2.0-sources.jar");
+  assert.deepEqual(await findKotlinStdlib({}, home), {
+    version: "2.2.0",
+    classes: path.join(home, gradle, "2.2.0/e5/kotlin-stdlib-2.2.0.jar"),
+    sources: path.join(
+      home,
+      gradle,
+      "2.2.0/f6/kotlin-stdlib-2.2.0-sources.jar",
+    ),
+  });
+  const custom = path.join(home, "custom-gradle");
+  await fs.mkdir(
+    path.join(
+      custom,
+      "caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/1.8.0/x",
+    ),
+    { recursive: true },
+  );
+  await fs.writeFile(
+    path.join(
+      custom,
+      "caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/1.8.0/x/kotlin-stdlib-1.8.0.jar",
+    ),
+    "",
+  );
+  assert.equal(
+    (
+      await findKotlinStdlib(
+        { GRADLE_USER_HOME: custom },
+        path.join(home, "nowhere"),
+      )
+    )?.version,
+    "1.8.0",
+  );
+});
+test("versions compare numerically with pre-releases first", () => {
+  assert.ok(compareVersions("2.1.21", "2.1.3") > 0);
+  assert.ok(compareVersions("2.2.0-RC", "2.2.0") < 0);
+  assert.ok(compareVersions("2.2.0-RC", "2.1.21") > 0);
+  assert.equal(compareVersions("1.9", "1.9.0"), 0);
+});
+test("library locations are decompiled by a server that supports it", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "changes-decompile-"));
+  const server = (commands: string[]) =>
+    `let buffer=Buffer.alloc(0);const write=(m)=>{const json=JSON.stringify({jsonrpc:'2.0',...m});process.stdout.write('Content-Length: '+Buffer.byteLength(json)+'\\r\\n\\r\\n'+json);};
+process.stdin.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const length=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+length)return;const message=JSON.parse(buffer.subarray(end+4,end+4+length));buffer=buffer.subarray(end+4+length);
+if(message.method==='initialize')write({id:message.id,result:{capabilities:{executeCommandProvider:{commands:${JSON.stringify(commands)}}}}});
+else if(message.method==='workspace/executeCommand')write({id:message.id,result:{code:'// '+message.params.arguments[0],language:'kotlin'}});
+else if(message.method==='shutdown')write({id:message.id,result:null});else if(message.method==='exit')process.exit(0);}});`;
+  await fs.writeFile(path.join(root, "with.cjs"), server(["decompile"]));
+  await fs.writeFile(path.join(root, "without.cjs"), server([]));
+  const make = (script: string) =>
+    new DeepManager(
+      root,
+      path.join(root, "storage-" + script),
+      () => ({ command: process.execPath, args: [path.join(root, script)] }),
+      () => {},
+      1,
+      () => {},
+      async () => ["A.kt"],
+      4000,
+      async () => undefined,
+    );
+  const capable = make("with.cjs"),
+    plain = make("without.cjs");
+  t.after(async () => {
+    await capable.stop();
+    await plain.stop();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const uri =
+    "jar:///cache/kotlin-stdlib.jar!/kotlin/collections/CollectionsKt.class";
+  assert.equal(await capable.decompile(uri), undefined, "no server running");
+  capable.enable();
+  plain.enable();
+  await capable.prioritize("kotlin", "A.kt", "class A");
+  await plain.prioritize("kotlin", "A.kt", "class A");
+  assert.deepEqual(await capable.decompile(uri), {
+    code: `// ${uri}`,
+    language: "kotlin",
+  });
+  assert.equal(await plain.decompile(uri), undefined);
 });

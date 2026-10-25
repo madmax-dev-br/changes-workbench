@@ -547,17 +547,14 @@ kbd {
 .cw-modified-background {
   background: var(--modify);
 }
-.cw-blame-text {
-  display: inline-block;
-  width: 190px;
-  color: var(--muted) !important;
-  font-size: 10px;
-  background: #72829808;
-  border-right: 1px solid #66708030;
-  margin-right: 10px;
-  white-space: pre;
-  overflow: hidden;
-  vertical-align: top;
+.monaco-editor .line-numbers.cw-blame-line {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+.monaco-editor .line-numbers.cw-blame-local {
+  color: var(--blue);
+  font-size: 11px;
 }
 .blame-bar {
   height: 33px;
@@ -930,4 +927,27 @@ footer button {
 
 .monaco-editor .cw-modified-inline {
   background: var(--modify) !important;
+}
+.cw-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px #0006;
+}
+.cw-menu button {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  text-align: left;
+  color: var(--text);
+  font-size: 12px;
+  border-radius: 4px;
+}
+.cw-menu button:hover,
+.cw-menu button:focus-visible {
+  background: var(--selection);
 }

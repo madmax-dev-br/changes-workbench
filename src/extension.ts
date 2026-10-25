@@ -45,6 +45,7 @@ class Workbench {
   private epoch = 0;
   private disposables: vscode.Disposable[] = [];
   private virtual = new Map<string, string>();
+  private decompiled = new Map<string, { code: string; language: string }>();
   private nativeBlameCache = new Map<
     string,
     { key: string; lines: BlameLine[] }
@@ -110,6 +111,23 @@ class Workbench {
       vscode.workspace.registerTextDocumentContentProvider("changes-commit", {
         provideTextDocumentContent: (uri) =>
           this.virtual.get(uri.toString()) ?? "",
+      }),
+    );
+    // Deep definitions into libraries (such as kotlin-stdlib) point inside jars.
+    const libraries: vscode.TextDocumentContentProvider = {
+      provideTextDocumentContent: (uri) => this.libraryText(uri),
+    };
+    for (const scheme of ["jar", "jrt"])
+      this.disposables.push(
+        vscode.workspace.registerTextDocumentContentProvider(scheme, libraries),
+      );
+    this.disposables.push(
+      vscode.workspace.onDidOpenTextDocument((document) => {
+        const found = this.decompiled.get(document.uri.toString(true));
+        if (found && document.languageId !== found.language)
+          void vscode.languages
+            .setTextDocumentLanguage(document, found.language)
+            .then(undefined, () => {});
       }),
     );
     this.disposables.push(
@@ -742,6 +760,21 @@ class Workbench {
       signal,
     );
     return note ? { ...light, note: light.note ?? note } : light;
+  }
+  private async libraryText(uri: vscode.Uri) {
+    const key = uri.toString(true);
+    let found = this.decompiled.get(key);
+    for (const service of this.services.values()) {
+      if (found) break;
+      found = await service.deep.decompile(key);
+    }
+    if (!found)
+      return "// This library file is shown by the deep analysis server. Turn on deep analysis (On demand) and open the definition again.\n";
+    this.decompiled.delete(key);
+    this.decompiled.set(key, found);
+    while (this.decompiled.size > 20)
+      this.decompiled.delete(this.decompiled.keys().next().value!);
+    return found.code;
   }
   /** Let the deep server analyze a file the user is looking at before the full index is done. */
   private prioritize(service: Services, file: string, text?: string) {

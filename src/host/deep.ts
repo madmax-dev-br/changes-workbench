@@ -7,6 +7,7 @@ import {
   CancellationTokenSource,
 } from "vscode-jsonrpc/node";
 import * as fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hash, inside } from "./git";
@@ -27,6 +28,7 @@ interface Session {
   documents: Map<string, { version: number; digest: string }>;
   language: string;
   supportsHover?: boolean;
+  commands: string[];
   indexing: boolean;
   ready: Promise<void>;
   markReady: () => void;
@@ -51,6 +53,7 @@ export class DeepManager {
   private events = new Map<string, 1 | 2 | 3>();
   private eventTimer?: NodeJS.Timeout;
   private lastProgress = 0;
+  private stdlib?: Promise<KotlinStdlib | undefined>;
   statusText = "Lightweight · on demand";
   enabled = false;
   constructor(
@@ -62,6 +65,8 @@ export class DeepManager {
     private log: (message: string) => void = () => {},
     private listFiles: () => Promise<string[]> = async () => [],
     private indexingTimeoutMs = 4000,
+    private findStdlib: () => Promise<KotlinStdlib | undefined> = () =>
+      findKotlinStdlib(),
   ) {}
   private report(message: string) {
     this.statusText = message;
@@ -183,6 +188,7 @@ export class DeepManager {
           this.report(`Deep · ${language} ready`);
       },
       watchers: [],
+      commands: [],
       progress: new Map(),
       workspace,
     };
@@ -289,6 +295,8 @@ export class DeepManager {
       if (generation !== this.generation || !this.enabled)
         throw new Error("Deep analysis stopped");
       session.supportsHover = Boolean(initialized?.capabilities?.hoverProvider);
+      session.commands =
+        initialized?.capabilities?.executeCommandProvider?.commands ?? [];
       await connection.sendNotification("initialized", {});
       const importsWorkspace = Boolean(
         initialized?.capabilities?.experimental?.workspaceImport,
@@ -343,11 +351,38 @@ export class DeepManager {
   private async writeKotlinWorkspace(file: string) {
     const roots = await sourceRoots(this.root, await this.listFiles());
     if (!roots.length) return "";
+    // Without the standard library, calls such as listOf, require or println do not resolve.
+    this.stdlib ??= this.findStdlib()
+      .catch(() => undefined)
+      .then((stdlib) => {
+        this.log(
+          stdlib
+            ? `[kotlin] standard library: ${stdlib.classes}`
+            : "[kotlin] no kotlin-stdlib jar found in the Gradle or Maven caches or KOTLIN_HOME; standard library calls will not resolve",
+        );
+        return stdlib;
+      });
+    const stdlib = await this.stdlib;
+    const library = stdlib && {
+      name: `kotlin-stdlib:${stdlib.version}`,
+      type: "COMPILE",
+      roots: [
+        { path: stdlib.classes },
+        ...(stdlib.sources ? [{ path: stdlib.sources, type: "SOURCES" }] : []),
+      ],
+    };
     const workspace = {
+      ...(library ? { libraries: [library] } : {}),
       modules: [
         {
           name: path.basename(this.root),
-          dependencies: [{ type: "moduleSource" }, { type: "inheritedSdk" }],
+          dependencies: [
+            { type: "moduleSource" },
+            ...(library
+              ? [{ type: "library", name: library.name, scope: "compile" }]
+              : []),
+            { type: "inheritedSdk" },
+          ],
           contentRoots: [
             {
               path: this.root,
@@ -408,6 +443,34 @@ export class DeepManager {
         });
       } catch (e) {
         this.log(`[kotlin] workspace reload failed: ${e}`);
+      }
+    }
+  }
+  /**
+   * Readable text for a library location (`jar:`/`jrt:`) that a definition points to, from a
+   * running server that can decompile it (Kotlin LSP).
+   */
+  async decompile(
+    uri: string,
+  ): Promise<{ code: string; language: string } | undefined> {
+    for (const session of this.sessions.values()) {
+      if (
+        this.starting.has(session.language) ||
+        !session.commands.includes("decompile")
+      )
+        continue;
+      try {
+        const result = await withTimeout(
+          session.connection.sendRequest<any>("workspace/executeCommand", {
+            command: "decompile",
+            arguments: [uri],
+          }),
+          20000,
+        );
+        if (typeof result?.code === "string")
+          return { code: result.code, language: result.language ?? "kotlin" };
+      } catch (e) {
+        this.log(`[${session.language}] decompile ${uri}: ${e}`);
       }
     }
   }
@@ -494,12 +557,24 @@ export class DeepManager {
     hints: string[] = [],
   ): Promise<Navigation> {
     this.touch();
-    const session = await this.session(language);
-    if (signal?.aborted) throw new Error("Cancelled");
+    if (!this.enabled) throw new Error("Deep analysis is disabled");
     const sourceLine = text.split("\n")[line] ?? "";
     const word =
       (sourceLine.slice(0, column).match(/[\w$]+$/)?.[0] ?? "") +
       (sourceLine.slice(column).match(/^[\w$]+/)?.[0] ?? "");
+    // A language whose server is not installed is not an analysis failure.
+    if (!this.sessions.has(language) && !this.starting.has(language)) {
+      const command = this.config(language).command;
+      if (!command || !(await findExecutable(command)))
+        return {
+          word,
+          candidates: [],
+          confidence: "none",
+          note: `No ${language === "java" ? "Java" : "Kotlin"} language server found (${command || "not configured"}); showing lightweight results. Set it up in Configure analysis.`,
+        };
+    }
+    const session = await this.session(language);
+    if (signal?.aborted) throw new Error("Cancelled");
     const indexing = session.indexing;
     // While indexing, open the likely targets so the server resolves them before the full index.
     if (indexing)
@@ -608,6 +683,7 @@ export class DeepManager {
   }
   async stop() {
     this.enabled = false;
+    this.stdlib = undefined;
     this.generation++;
     this.starting.clear();
     clearTimeout(this.idle);
@@ -689,6 +765,104 @@ export function cleanDocumentation(markdown: string, signature?: string) {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+export interface KotlinStdlib {
+  version: string;
+  classes: string;
+  sources?: string;
+}
+/**
+ * The newest kotlin-stdlib jar (with its sources when present) from the local Gradle or Maven
+ * caches, or the compiler in KOTLIN_HOME. Nothing is downloaded.
+ */
+export async function findKotlinStdlib(
+  env: NodeJS.ProcessEnv = process.env,
+  home = os.homedir(),
+): Promise<KotlinStdlib | undefined> {
+  const found: KotlinStdlib[] = [];
+  const gradle = path.join(
+    env.GRADLE_USER_HOME || path.join(home, ".gradle"),
+    "caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib",
+  );
+  for (const version of await list(gradle)) {
+    const jars = (
+      await Promise.all(
+        (await list(path.join(gradle, version))).map(async (hash) =>
+          (await list(path.join(gradle, version, hash))).map((f) =>
+            path.join(gradle, version, hash, f),
+          ),
+        ),
+      )
+    ).flat();
+    const classes = jars.find(
+      (f) => path.basename(f) === `kotlin-stdlib-${version}.jar`,
+    );
+    if (classes)
+      found.push({
+        version,
+        classes,
+        sources: jars.find(
+          (f) => path.basename(f) === `kotlin-stdlib-${version}-sources.jar`,
+        ),
+      });
+  }
+  const maven = path.join(
+    home,
+    ".m2/repository/org/jetbrains/kotlin/kotlin-stdlib",
+  );
+  for (const version of await list(maven)) {
+    const classes = path.join(maven, version, `kotlin-stdlib-${version}.jar`);
+    if (!(await exists(classes))) continue;
+    const sources = path.join(
+      maven,
+      version,
+      `kotlin-stdlib-${version}-sources.jar`,
+    );
+    found.push({
+      version,
+      classes,
+      sources: (await exists(sources)) ? sources : undefined,
+    });
+  }
+  const newest = found.sort((a, b) => compareVersions(b.version, a.version))[0];
+  if (newest) return newest;
+  if (env.KOTLIN_HOME) {
+    const classes = path.join(env.KOTLIN_HOME, "lib", "kotlin-stdlib.jar");
+    const sources = path.join(
+      env.KOTLIN_HOME,
+      "lib",
+      "kotlin-stdlib-sources.jar",
+    );
+    if (await exists(classes))
+      return {
+        version: "KOTLIN_HOME",
+        classes,
+        sources: (await exists(sources)) ? sources : undefined,
+      };
+  }
+}
+/** Compare dotted versions numerically; pre-release suffixes sort before the release. */
+export function compareVersions(a: string, b: string) {
+  const parse = (v: string) => {
+    const [main, suffix] = v.split(/-(.*)/);
+    return {
+      parts: main.split(".").map((n) => Number.parseInt(n, 10) || 0),
+      suffix,
+    };
+  };
+  const x = parse(a),
+    y = parse(b);
+  for (let i = 0; i < Math.max(x.parts.length, y.parts.length); i++) {
+    const d = (x.parts[i] ?? 0) - (y.parts[i] ?? 0);
+    if (d) return d;
+  }
+  if (x.suffix === y.suffix) return 0;
+  if (!x.suffix) return 1;
+  if (!y.suffix) return -1;
+  return x.suffix < y.suffix ? -1 : 1;
+}
+async function list(directory: string) {
+  return fs.readdir(directory).catch(() => [] as string[]);
 }
 async function readSource(root: string, file: string) {
   try {

@@ -167,7 +167,9 @@ export default function App() {
   const [error, setError] = useState("");
   const [unified, setUnified] = useState(false);
   const [blame, setBlame] = useState<BlameLine[]>([]);
-  const [showBlame, setShowBlame] = useState(false);
+  const [showBlame, setShowBlame] = useState<boolean>(
+    persisted.current.showBlame ?? false,
+  );
   const [position, setPosition] = useState({ line: 0, column: 0 });
   const [navigation, setNavigation] = useState<Navigation>();
   const [original, setOriginal] = useState<{ text: string; line: number }>();
@@ -315,8 +317,8 @@ export default function App() {
     return () => document.removeEventListener("cw-file", fn);
   }, [filtered]);
   useEffect(() => {
-    vscode.setState({ ...vscode.getState(), selected, sidebar });
-  }, [selected, sidebar]);
+    vscode.setState({ ...vscode.getState(), selected, sidebar, showBlame });
+  }, [selected, sidebar, showBlame]);
   useEffect(() => {
     if (!selected) {
       setSnapshot(undefined);
@@ -732,6 +734,7 @@ export default function App() {
                 onDefinitions={setNavigation}
                 onOriginal={(text, line) => setOriginal({ text, line })}
                 onError={report}
+                onToggleBlame={setShowBlame}
                 viewStates={viewStates.current}
                 theme={theme}
                 intellijKeymap={state?.intellijKeymap ?? true}
@@ -779,35 +782,36 @@ export default function App() {
                 {navigation.note && (
                   <p className="peek-note">{navigation.note}</p>
                 )}
-                {!navigation.candidates.length ? (
-                  <p className="peek-note">
-                    No definition found locally. Enable deep analysis for type
-                    resolution.
-                  </p>
-                ) : (
-                  navigation.candidates.map((s, i) => (
-                    <article key={`${s.path}:${s.line}:${i}`}>
-                      <button
-                        className="definition-link"
-                        onClick={() =>
-                          void perform("openLocation", {
-                            path: s.path,
-                            line: s.line,
-                            column: s.column,
-                          })
-                        }
-                      >
-                        <strong>{s.name}</strong>
-                        <span title={s.path}>
-                          {displayPath(s.path, state?.repo.root)}:{s.line + 1}
-                        </span>
-                        <Icon name="external" size={13} />
-                      </button>
-                      <pre>{s.preview ?? s.signature}</pre>
-                      {s.documentation && <p>{s.documentation}</p>}
-                    </article>
-                  ))
-                )}
+                {!navigation.candidates.length
+                  ? !navigation.note && (
+                      <p className="peek-note">
+                        {state?.mode === "deep"
+                          ? "No definition found."
+                          : "No definition found locally. Enable deep analysis for type resolution."}
+                      </p>
+                    )
+                  : navigation.candidates.map((s, i) => (
+                      <article key={`${s.path}:${s.line}:${i}`}>
+                        <button
+                          className="definition-link"
+                          onClick={() =>
+                            void perform("openLocation", {
+                              path: s.path,
+                              line: s.line,
+                              column: s.column,
+                            })
+                          }
+                        >
+                          <strong>{s.name}</strong>
+                          <span title={s.path}>
+                            {displayPath(s.path, state?.repo.root)}:{s.line + 1}
+                          </span>
+                          <Icon name="external" size={13} />
+                        </button>
+                        <pre>{s.preview ?? s.signature}</pre>
+                        {s.documentation && <p>{s.documentation}</p>}
+                      </article>
+                    ))}
               </div>
             )}
             {original && (

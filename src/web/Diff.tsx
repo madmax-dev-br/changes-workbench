@@ -1,6 +1,7 @@
 import React, {
   useEffect,
   useRef,
+  useState,
   useImperativeHandle,
   forwardRef,
 } from "react";
@@ -94,6 +95,7 @@ interface Props {
   onDefinitions: (nav: Navigation) => void;
   onOriginal: (text: string, line: number) => void;
   onError: (message: string) => void;
+  onToggleBlame: (show: boolean) => void;
   viewStates: Map<string, monaco.editor.IDiffEditorViewState>;
   theme: string;
   intellijKeymap: boolean;
@@ -106,6 +108,9 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
   );
   const latest = useRef(props);
   latest.current = props;
+  const [menu, setMenu] = useState<
+    { x: number; y: number; gutter: boolean } | undefined
+  >();
   const currentKey = useRef("");
   const navigationRequest = useRef<AbortController | undefined>(undefined);
   const markers = useRef<
@@ -114,6 +119,7 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
     annotations = useRef<
       monaco.editor.IEditorDecorationsCollection | undefined
     >(undefined);
+
   const navigate = async (line?: number, column?: number) => {
     const p = latest.current;
     navigationRequest.current?.abort();
@@ -189,7 +195,8 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
       renderIndicators: false,
       glyphMargin: true,
       folding: true,
-      contextmenu: true,
+      // Monaco's menu does not render inside VS Code webviews; the panel draws its own.
+      contextmenu: false,
       wordWrap: "off",
       diffWordWrap: "off",
       renderOverviewRuler: false,
@@ -280,6 +287,42 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
         },
       });
     disposables.push(addHover("kotlin"), addHover("java"));
+    // IntelliJ-style annotations: right-click the gutter (or the text) to annotate or close.
+    const gutter = [
+      monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN,
+      monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS,
+      monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS,
+    ];
+    disposables.push(
+      modified.onContextMenu((e) => {
+        e.event.preventDefault();
+        e.event.stopPropagation();
+        if (e.target.position) modified.setPosition(e.target.position);
+        modified.focus();
+        setMenu({
+          x: e.event.browserEvent.clientX,
+          y: e.event.browserEvent.clientY,
+          gutter: gutter.includes(e.target.type),
+        });
+      }),
+      // Clicking an annotation opens that line's commit, as in IntelliJ.
+      modified.onMouseDown((e) => {
+        const p = latest.current;
+        if (
+          !p.showBlame ||
+          e.event.rightButton ||
+          e.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS
+        )
+          return;
+        const line = p.blame.find(
+          (b) => b.line === e.target.position?.lineNumber,
+        );
+        if (line && !line.local)
+          void request("openCommit", { sha: line.sha, path: line.path }).catch(
+            (error) => latest.current.onError(String(error)),
+          );
+      }),
+    );
     disposables.push(
       modified.addAction({
         id: "changes.previewDefinition",
@@ -459,29 +502,95 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
     monaco.editor.setTheme(`changes-${props.theme}`);
   }, [props.theme]);
   useEffect(() => {
-    const model = diff.current?.getModifiedEditor().getModel();
-    if (!model) return;
+    if (!menu) return;
+    const close = () => setMenu(undefined);
+    const key = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("mousedown", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("wheel", close, { passive: true });
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("wheel", close);
+      window.removeEventListener("keydown", key);
+    };
+  }, [menu]);
+  useEffect(() => {
+    const modified = diff.current?.getModifiedEditor();
+    const model = modified?.getModel();
+    if (!modified || !model) return;
+    if (!props.showBlame) {
+      modified.updateOptions({ lineNumbers: "on", lineNumbersMinChars: 5 });
+      annotations.current?.set([]);
+      return;
+    }
+    const byLine = new Map(props.blame.map((b) => [b.line, b]));
+    modified.updateOptions({
+      lineNumbersMinChars: BLAME_WIDTH + 5,
+      lineNumbers: (line) =>
+        (byLine.has(line) ? blameLabel(byLine.get(line)!) : "").padEnd(
+          BLAME_WIDTH,
+        ) + String(line).padStart(5),
+    });
     annotations.current?.set(
-      props.showBlame
-        ? props.blame
-            .filter((b) => b.line <= model.getLineCount())
-            .map((b) => ({
-              range: new monaco.Range(b.line, 1, b.line, 1),
-              options: {
-                showIfCollapsed: true,
-                before: {
-                  content: `${b.local ? "You" : b.author.slice(0, 16)} · ${b.local ? "local" : b.sha.slice(0, 7)}  `,
-                  inlineClassName: "cw-blame-text",
-                  cursorStops: monaco.editor.InjectedTextCursorStops.None,
-                },
-                hoverMessage: { value: escapeMarkdown(b.summary) },
-              },
-            }))
-        : [],
+      props.blame
+        .filter((b) => b.line <= model.getLineCount())
+        .map((b) => ({
+          range: new monaco.Range(b.line, 1, b.line, 1),
+          options: {
+            lineNumberClassName: b.local ? "cw-blame-local" : "cw-blame-line",
+            lineNumberHoverMessage: {
+              value: b.local
+                ? "Not committed yet"
+                : `**${escapeMarkdown(b.author)}** · ${b.sha.slice(0, 7)} · ${new Date(b.time * 1000).toLocaleString()}\n\n${escapeMarkdown(b.summary)}\n\nClick to open the commit.`,
+            },
+          },
+        })),
     );
   }, [props.blame, props.showBlame, props.snapshot.version]);
-  return <div ref={mount} className="diff-editor" data-testid="diff-editor" />;
+  const item = (label: string, run: () => void) => (
+    <button
+      role="menuitem"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={() => {
+        setMenu(undefined);
+        run();
+      }}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <>
+      <div ref={mount} className="diff-editor" data-testid="diff-editor" />
+      {menu && (
+        <div
+          className="cw-menu"
+          role="menu"
+          style={{ left: menu.x, top: menu.y }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {props.showBlame
+            ? item("Close Annotations", () => props.onToggleBlame(false))
+            : item("Annotate with Git Blame", () => props.onToggleBlame(true))}
+          {!menu.gutter && item("Preview Definition", () => void navigate())}
+        </div>
+      )}
+    </>
+  );
 });
+const BLAME_WIDTH = 24;
+/** IntelliJ-style gutter annotation: short date and author. */
+function blameLabel(b: BlameLine) {
+  if (b.local) return "Not committed";
+  const date = new Date(b.time * 1000).toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  });
+  return `${date} ${b.author}`.slice(0, BLAME_WIDTH - 1);
+}
 function escapeMarkdown(text: string) {
   return text.replace(/[\\`*_{}\[\]()<>#+!|]/g, "\\$&");
 }
