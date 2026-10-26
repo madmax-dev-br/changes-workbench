@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.0
+
+- Attach Debugger to Process, as in Android Studio and IntelliJ: a button beside the run widget (and `⌥⇧F5` / `Ctrl+Alt+F5`) lists debuggable apps on connected devices and emulators, with this project's apps first, local JVMs started with a JDWP agent, and a Remote JVM entry for any `host:port`. The chosen process is attached to without restarting it, with breakpoints, stepping, variables and the call stack, and sources found in every module and flavor. It uses the Debugger for Java extension and offers to install it. Breakpoints in Kotlin files are not supported by that debugger.
+
 ## 0.5.0
 
 - Search Everywhere, as in IntelliJ: press `Shift` twice in the workbench to search classes, files, symbols (functions and methods), actions and text, with camel-hump matching and **All / Classes / Files / Symbols / Actions / Text** tabs.

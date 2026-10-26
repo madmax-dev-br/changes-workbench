@@ -2,7 +2,7 @@
   "name": "changes-workbench",
   "displayName": "Changes Workbench",
   "description": "IntelliJ-style change review for VS Code and Cursor: change tree, diff with gutter Rollback, Git blame in the gutter, IntelliJ run configurations, and Kotlin/Java navigation with optional language-server indexing.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "madmax-dev-br",
   "license": "MIT",
   "repository": {
@@ -139,6 +139,10 @@
         "title": "Changes: Build Selected Configuration"
       },
       {
+        "command": "changesWorkbench.attachDebugger",
+        "title": "Changes: Attach Debugger to Process…"
+      },
+      {
         "command": "changesWorkbench.findInFiles",
         "title": "Changes: Find in Files…"
       }
@@ -171,6 +175,12 @@
       ]
     },
     "keybindings": [
+      {
+        "command": "changesWorkbench.attachDebugger",
+        "key": "ctrl+alt+f5",
+        "mac": "alt+shift+f5",
+        "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
+      },
       {
         "command": "changesWorkbench.build",
         "key": "ctrl+f9",

@@ -23,7 +23,7 @@ export interface RunConfiguration {
   /** Android app module: the build variant is chosen at run time (see `withVariant`). */
   android?: {
     module: string;
-    /** Command that prints the module's installable variants as `cw-variant <name>` lines. */
+    /** Command that prints the installable variants as `cw-variant <name> <applicationId>` lines. */
     variants: string;
   };
 }
@@ -221,9 +221,16 @@ export const buildCommand = (run: RunConfiguration, variant?: string) =>
   run.android && run.build
     ? `${run.build}${variant ? variant[0].toUpperCase() + variant.slice(1) : "Debug"}`
     : run.build;
+const variantLines = (output: string) => [
+  ...output.matchAll(/^cw-variant (\S+)(?:[ \t]+(\S+))?[ \t]*$/gm),
+];
 /** Variant names from the output of `android.variants`. */
 export const parseVariants = (output: string) =>
-  [...output.matchAll(/^cw-variant (\S+)\s*$/gm)].map((m) => m[1]);
+  variantLines(output).map((m) => m[1]);
+/** The application IDs printed next to the variants (`dev.app.hmg`). */
+export const parseApplicationIds = (output: string) => [
+  ...new Set(variantLines(output).flatMap((m) => (m[2] ? [m[2]] : []))),
+];
 /** IntelliJ's default: `debug`, else the first debug variant, else the first one. */
 export const defaultVariant = (variants: string[]) =>
   variants.includes("debug")
@@ -593,7 +600,7 @@ allprojects { project ->
       names.contains('debug') ? 'debug' : names.size() == 1 ? names[0] : null
     }
     project.tasks.register('changesWorkbenchVariants') {
-      doLast { installable().each { logger.quiet("cw-variant \$it") } }
+      doLast { installable().each { logger.quiet("cw-variant \$it \${ids[it].get()}") } }
     }
     project.tasks.register('changesWorkbenchAndroidRun') {
       dependsOn { def name = chosen(); name && project.tasks.names.contains(install(name)) ? install(name) : [] }

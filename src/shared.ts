@@ -145,6 +145,7 @@ export type RequestMethod =
   | "run"
   | "stopRun"
   | "build"
+  | "attachDebugger"
   | "selectRun"
   | "selectVariant"
   | "reloadVariants"

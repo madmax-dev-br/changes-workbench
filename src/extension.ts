@@ -10,6 +10,15 @@ import { DeepManager } from "./host/deep";
 import { ReviewStore } from "./host/reviews";
 import { findExecutable } from "./host/dependencies";
 import {
+  androidTargets,
+  findAdb,
+  forwardJdwp,
+  jvmTargets,
+  removeForward,
+  sourcePaths,
+  type DebugTarget,
+} from "./host/debug";
+import {
   listFiles,
   rank,
   ripgrep,
@@ -22,8 +31,10 @@ import {
 import {
   INIT_SCRIPT,
   buildCommand,
+  findModules,
   defaultVariant,
   loadRuns,
+  parseApplicationIds,
   parseVariants,
   withVariant,
   type RunConfiguration,
@@ -154,6 +165,7 @@ class Workbench {
     command("selectRun", () => this.pickRun());
     command("selectVariant", () => this.pickVariant());
     command("build", () => this.buildSelected());
+    command("attachDebugger", () => this.attachDebugger());
     for (const name of ["searchEverywhere", "findInFiles"])
       command(name, async () => {
         // The webview is kept while hidden, so a revealed panel gets the command directly.
@@ -851,6 +863,8 @@ class Workbench {
       }
       case "run":
         return this.startRun(this.root, str("name"));
+      case "attachDebugger":
+        return this.attachDebugger();
       case "build":
         return this.startBuild(this.root, str("name"));
       case "stopRun":
@@ -1002,6 +1016,10 @@ class Workbench {
           ),
       );
       const found = parseVariants(output.toString());
+      await this.context.workspaceState.update(
+        `variantIds:${module}`,
+        parseApplicationIds(output.toString()),
+      );
       await this.context.workspaceState.update(`variants:${module}`, found);
       return found;
     })();
@@ -1133,6 +1151,162 @@ class Workbench {
         e instanceof Error ? e.message : String(e),
       );
     }
+  }
+  /** Attach to Process, as in IntelliJ and Android Studio: debuggable apps on devices and JVMs. */
+  private async attachDebugger() {
+    try {
+      await this.ensureRoot();
+      if (!(await this.ensureJavaDebugger())) return;
+      const root = this.root;
+      const runs = await this.loadRuns(root).catch(() => []);
+      const apps = runs.filter((r) => r.android);
+      const adb = findAdb([...new Set(apps.map((r) => r.cwd))]);
+      const appIds = apps.flatMap(
+        (r) =>
+          this.context.workspaceState.get<string[]>(
+            `variantIds:${r.android!.module}`,
+          ) ?? [],
+      );
+      type Item = vscode.QuickPickItem & {
+        target?: DebugTarget;
+        remote?: boolean;
+      };
+      const remote: Item = {
+        label: "$(plug) Remote JVM…",
+        description: "Attach to a JVM debug port (host:port)",
+        remote: true,
+      };
+      const pick = vscode.window.createQuickPick<Item>();
+      pick.title = "Attach to Process";
+      pick.placeholder = "Choose a process to attach the debugger to";
+      pick.matchOnDescription = true;
+      pick.busy = true;
+      pick.items = [remote];
+      pick.show();
+      const chosen = new Promise<Item | undefined>((resolve) => {
+        pick.onDidAccept(() => resolve(pick.selectedItems[0]));
+        pick.onDidHide(() => resolve(undefined));
+      });
+      void Promise.all([androidTargets(adb, appIds), jvmTargets()]).then(
+        ([android, jvms]) => {
+          const items: Item[] = [];
+          let device = "";
+          for (const target of android) {
+            if (target.serial !== device) {
+              device = target.serial!;
+              items.push({
+                label: `${target.device} (${target.serial})`,
+                kind: vscode.QuickPickItemKind.Separator,
+              });
+            }
+            items.push({
+              label: `$(device-mobile) ${target.name}`,
+              description: `pid ${target.pid}${target.project ? " · this project" : ""}`,
+              target,
+            });
+          }
+          if (jvms.length)
+            items.push({
+              label: "Java (local)",
+              kind: vscode.QuickPickItemKind.Separator,
+            });
+          for (const target of jvms)
+            items.push({
+              label: `$(coffee) ${target.name}`,
+              description: `pid ${target.pid} · ${target.host}:${target.port}`,
+              target,
+            });
+          items.push(
+            { label: "", kind: vscode.QuickPickItemKind.Separator },
+            remote,
+          );
+          pick.items = items;
+          pick.placeholder =
+            android.length || jvms.length
+              ? "Choose a process to attach the debugger to"
+              : "No debuggable processes: start a debug build on a device, or a JVM with -agentlib:jdwp";
+          pick.busy = false;
+        },
+      );
+      const item = await chosen;
+      pick.dispose();
+      if (!item) return;
+      if (item.remote) {
+        const address = await vscode.window.showInputBox({
+          title: "Attach to Remote JVM",
+          value: "localhost:5005",
+          prompt:
+            "Host and port of a JVM started with -agentlib:jdwp=transport=dt_socket,server=y",
+          validateInput: (v) =>
+            /^[\w.-]+:\d+$/.test(v.trim()) ? undefined : "Use host:port",
+        });
+        if (!address) return;
+        const [host, port] = address.trim().split(":");
+        return this.attach(root, {
+          kind: "jvm",
+          name: address.trim(),
+          pid: 0,
+          host,
+          port: Number(port),
+        });
+      }
+      if (item.target) await this.attach(root, item.target, adb);
+    } catch (e) {
+      vscode.window.showErrorMessage(
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+  private async attach(root: string, target: DebugTarget, adb = "adb") {
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
+    const config: vscode.DebugConfiguration = {
+      type: "java",
+      request: "attach",
+      name:
+        target.kind === "android"
+          ? `${target.name} (${target.device})`
+          : `${target.name}${target.pid ? ` (pid ${target.pid})` : ""}`,
+      hostName: target.host ?? "localhost",
+      port: target.port,
+      timeout: 30000,
+      sourcePaths: await sourcePaths(
+        (await findModules(root)).map((m) => m.dir),
+      ),
+    };
+    if (target.kind === "android") {
+      // The app's JDWP is reached through a local port that adb forwards.
+      const port = await forwardJdwp(adb, target.serial!, target.pid);
+      config.port = port;
+      const sub = vscode.debug.onDidTerminateDebugSession((session) => {
+        if (session.configuration.port !== port) return;
+        sub.dispose();
+        void removeForward(adb, target.serial!, port);
+      });
+      if (!(await vscode.debug.startDebugging(folder, config))) {
+        sub.dispose();
+        await removeForward(adb, target.serial!, port);
+      }
+      return;
+    }
+    await vscode.debug.startDebugging(folder, config);
+  }
+  /** Attaching uses Microsoft's Java debugger, which needs Red Hat's Java language support. */
+  private async ensureJavaDebugger() {
+    const missing = ["vscjava.vscode-java-debug", "redhat.java"].filter(
+      (id) => !vscode.extensions.getExtension(id),
+    );
+    if (!missing.length) return true;
+    const choice = await vscode.window.showInformationMessage(
+      "Attaching a debugger uses the Debugger for Java and Language Support for Java extensions.",
+      "Install",
+    );
+    if (choice !== "Install") return false;
+    for (const id of missing)
+      await vscode.commands.executeCommand(
+        "workbench.extensions.installExtension",
+        id,
+      );
+    return true;
   }
   private async buildSelected() {
     try {

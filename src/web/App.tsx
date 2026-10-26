@@ -49,7 +49,8 @@ type IconName =
   | "play"
   | "stop"
   | "rerun"
-  | "build";
+  | "build"
+  | "attach";
 const shapes: Record<IconName, React.ReactNode> = {
   branch: (
     <>
@@ -114,6 +115,13 @@ const shapes: Record<IconName, React.ReactNode> = {
     <>
       <path d="M19 12a7 7 0 1 1-2.1-5" />
       <path d="M17.5 2.5v4.5H13" />
+    </>
+  ),
+  attach: (
+    <>
+      <path d="M9 9.5a3 3 0 0 1 6 0V15a3 3 0 0 1-6 0z" />
+      <path d="M12 12v4M6.5 10.5H9M6.5 15H9M15 15h2M10 6.5 8.5 5M14 6.5 15.5 5" />
+      <path d="M17 8.5h4.5M19.5 6.5l2 2-2 2" />
     </>
   ),
   build: (
@@ -1082,6 +1090,14 @@ function RunWidget({
         onClick={() => run && void perform("run", { name: run.name })}
       >
         <Icon name={run?.running ? "rerun" : "play"} size={15} />
+      </button>
+      <button
+        className="attach-button"
+        aria-label="Attach Debugger to Process"
+        title="Attach Debugger to Process (⌥⇧F5)"
+        onClick={() => void perform("attachDebugger")}
+      >
+        <Icon name="attach" size={15} />
       </button>
       {run?.running && (
         <button

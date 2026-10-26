@@ -957,7 +957,11 @@ footer button {
 .build-button {
   color: var(--green);
 }
-.build-button {
+.attach-button {
+  color: var(--accent);
+}
+.build-button,
+.attach-button {
   width: 28px;
   height: 26px;
   display: inline-flex;
@@ -965,7 +969,8 @@ footer button {
   justify-content: center;
   border-radius: 4px;
 }
-.build-button:hover:not(:disabled) {
+.build-button:hover:not(:disabled),
+.attach-button:hover {
   background: var(--bar);
 }
 .stop-button {
