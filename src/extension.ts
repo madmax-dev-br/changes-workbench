@@ -21,6 +21,7 @@ import {
 } from "./host/search";
 import {
   INIT_SCRIPT,
+  buildCommand,
   defaultVariant,
   loadRuns,
   parseVariants,
@@ -152,6 +153,7 @@ class Workbench {
     command("run", () => this.runSelected());
     command("selectRun", () => this.pickRun());
     command("selectVariant", () => this.pickVariant());
+    command("build", () => this.buildSelected());
     for (const name of ["searchEverywhere", "findInFiles"])
       command(name, async () => {
         // The webview is kept while hidden, so a revealed panel gets the command directly.
@@ -849,6 +851,8 @@ class Workbench {
       }
       case "run":
         return this.startRun(this.root, str("name"));
+      case "build":
+        return this.startBuild(this.root, str("name"));
       case "stopRun":
         this.executions.get(`${this.root}\0${str("name")}`)?.terminate();
         return;
@@ -943,6 +947,7 @@ class Workbench {
           : (withVariant(r, variant) ?? r.reason ?? ""),
         runnable: Boolean(r.command || r.compound?.length),
         running: this.executions.has(`${root}\0${r.name}`),
+        build: buildCommand(r, variant),
         ...(r.android && {
           variants: this.cachedVariants(r) ?? [],
           variant,
@@ -1129,6 +1134,35 @@ class Workbench {
       );
     }
   }
+  private async buildSelected() {
+    try {
+      await this.ensureRoot();
+      const name = this.selectedRun(this.root, await this.runInfos(this.root));
+      if (!name) {
+        vscode.window.showInformationMessage(
+          "Select a run configuration to build.",
+        );
+        return;
+      }
+      await this.startBuild(this.root, name);
+    } catch (e) {
+      vscode.window.showErrorMessage(
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+  /** IntelliJ's Build: compile the module the configuration runs, in its own terminal. */
+  private async startBuild(root: string, name: string) {
+    const run = (await this.loadRuns(root, true)).find((r) => r.name === name);
+    if (!run) throw new Error(`Run configuration '${name}' not found`);
+    const command = buildCommand(run, this.variant(root, run));
+    if (!command)
+      throw new Error(`'${name}' has no separate build step; run it instead.`);
+    await this.stopExecution(`${root}\0Build ${name}`);
+    await vscode.tasks.executeTask(
+      this.task(root, run, command, `Build ${name}`),
+    );
+  }
   private async pickRun() {
     try {
       await this.ensureRoot();
@@ -1196,7 +1230,11 @@ class Workbench {
     const command = withVariant(run, this.variant(root, run))!;
     if (command.includes(this.initScript)) await this.writeInitScript();
     // Like IntelliJ's Rerun: stop the running instance first.
-    const key = `${root}\0${name}`;
+    await this.stopExecution(`${root}\0${name}`);
+    await vscode.tasks.executeTask(this.task(root, run, command));
+  }
+  /** Terminate a running task and wait (up to 3 s) for it to end. */
+  private async stopExecution(key: string) {
     const running = this.executions.get(key);
     if (running) {
       const ended = new Promise<void>((resolve) => {
@@ -1214,18 +1252,22 @@ class Workbench {
       running.terminate();
       await ended;
     }
-    await vscode.tasks.executeTask(this.task(root, run, command));
   }
   private async writeInitScript() {
     await fs.mkdir(path.dirname(this.initScript), { recursive: true });
     await fs.writeFile(this.initScript, INIT_SCRIPT);
   }
-  private task(root: string, run: RunConfiguration, command: string) {
+  private task(
+    root: string,
+    run: RunConfiguration,
+    command: string,
+    name = run.name,
+  ) {
     const task = new vscode.Task(
-      { type: "changesWorkbench", name: run.name, root },
+      { type: "changesWorkbench", name, root },
       vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root)) ??
         vscode.TaskScope.Workspace,
-      run.name,
+      name,
       "Run",
       new vscode.ShellExecution(command, {
         cwd: run.cwd,

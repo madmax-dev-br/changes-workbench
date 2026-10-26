@@ -108,6 +108,8 @@ export interface RunInfo {
   detail: string;
   runnable: boolean;
   running: boolean;
+  /** The command Build runs, when the configuration can be compiled on its own. */
+  build?: string;
   /** Android apps: the module's build variants (empty until Gradle has listed them). */
   variants?: string[];
   variant?: string;
@@ -142,6 +144,7 @@ export type RequestMethod =
   | "rollback"
   | "run"
   | "stopRun"
+  | "build"
   | "selectRun"
   | "selectVariant"
   | "reloadVariants"

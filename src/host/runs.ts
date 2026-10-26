@@ -18,6 +18,8 @@ export interface RunConfiguration {
   /** Names of the configurations a compound configuration starts. */
   compound?: string[];
   reason?: string;
+  /** Command that compiles what the configuration runs, without running it (IntelliJ's Build). */
+  build?: string;
   /** Android app module: the build variant is chosen at run time (see `withVariant`). */
   android?: {
     module: string;
@@ -197,6 +199,8 @@ function androidRun(
   ]
     .filter(Boolean)
     .join(" ");
+  // `assembleDebug` covers every flavor; a chosen variant narrows it (see `buildCommand`).
+  run.build = `${gradle[0]} ${gradleTask(module, "assemble")}`;
   run.android = {
     module: module.dir,
     variants: [
@@ -212,6 +216,11 @@ export const withVariant = (run: RunConfiguration, variant?: string) =>
   run.android && variant
     ? `${run.command} ${quote(`-PcwVariant=${variant}`)}`
     : run.command;
+/** The command that builds a configuration, for Android with its variant (`assembleFreeDebug`). */
+export const buildCommand = (run: RunConfiguration, variant?: string) =>
+  run.android && run.build
+    ? `${run.build}${variant ? variant[0].toUpperCase() + variant.slice(1) : "Debug"}`
+    : run.build;
 /** Variant names from the output of `android.variants`. */
 export const parseVariants = (output: string) =>
   [...output.matchAll(/^cw-variant (\S+)\s*$/gm)].map((m) => m[1]);
@@ -391,6 +400,7 @@ function resolveConfiguration(
       const vmArgs = macros(value(config, "VM_PARAMETERS"));
       if (module.kind === "maven") {
         run.cwd = module.dir;
+        run.build = `${wrapper(ctx, module.dir, "mvnw", "mvn")} compile`;
         if (vmArgs) run.env.MAVEN_OPTS = vmArgs;
         run.command = [
           wrapper(ctx, module.dir, "mvnw", "mvn"),
@@ -406,6 +416,7 @@ function resolveConfiguration(
         break;
       }
       run.cwd = module.buildRoot;
+      run.build = `${wrapper(ctx, module.buildRoot, "gradlew", "gradle")} ${gradleTask(module, "classes")}`;
       run.command = [
         wrapper(ctx, module.buildRoot, "gradlew", "gradle"),
         "--init-script",

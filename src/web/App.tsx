@@ -48,7 +48,8 @@ type IconName =
   | "chevron"
   | "play"
   | "stop"
-  | "rerun";
+  | "rerun"
+  | "build";
 const shapes: Record<IconName, React.ReactNode> = {
   branch: (
     <>
@@ -113,6 +114,12 @@ const shapes: Record<IconName, React.ReactNode> = {
     <>
       <path d="M19 12a7 7 0 1 1-2.1-5" />
       <path d="M17.5 2.5v4.5H13" />
+    </>
+  ),
+  build: (
+    <>
+      <path d="M12.5 4.5 15 2l7 7-2.5 2.5z" />
+      <path d="m14 8-10.3 10.3a1.6 1.6 0 0 0 2.3 2.3L16.3 10.3" />
     </>
   ),
 };
@@ -1000,6 +1007,21 @@ function RunWidget({
   const run = runs.find((r) => r.name === selected);
   return (
     <div className="run-widget">
+      <button
+        className="build-button"
+        aria-label={run ? `Build '${run.name}'` : "Build"}
+        title={
+          !run
+            ? "Select a run configuration to build"
+            : run.build
+              ? `Build '${run.name}' (⌘F9)\n${run.build}`
+              : `'${run.name}' has no separate build step`
+        }
+        disabled={!run?.build}
+        onClick={() => run && void perform("build", { name: run.name })}
+      >
+        <Icon name="build" size={15} />
+      </button>
       <select
         aria-label="Run configuration"
         title={run?.detail ?? "Select a run configuration"}

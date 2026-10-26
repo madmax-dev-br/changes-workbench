@@ -135,6 +135,10 @@
         "title": "Changes: Search Everywhere"
       },
       {
+        "command": "changesWorkbench.build",
+        "title": "Changes: Build Selected Configuration"
+      },
+      {
         "command": "changesWorkbench.findInFiles",
         "title": "Changes: Find in Files…"
       }
@@ -167,6 +171,12 @@
       ]
     },
     "keybindings": [
+      {
+        "command": "changesWorkbench.build",
+        "key": "ctrl+f9",
+        "mac": "cmd+f9",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.hasRuns && !terminalFocus"
+      },
       {
         "command": "changesWorkbench.searchEverywhere",
         "key": "shift shift",

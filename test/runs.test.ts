@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  buildCommand,
   defaultVariant,
   loadRuns,
   parseVariants,
@@ -157,6 +158,8 @@ test("runs Java Application configurations on the module's Gradle runtime classp
     run.command,
     `./gradlew --init-script /store/run.gradle --no-configuration-cache :server:changesWorkbenchRun -PcwProject=:server -PcwMain=dev.shop.Server -PcwDir=${path.join(root, "server")} '-PcwArgs=--port 8080 --name "my shop"' -PcwJvmArgs=-Xmx256m`,
   );
+  // Build compiles the module without running it.
+  assert.equal(run.build, "./gradlew :server:classes");
 });
 
 test("finds a Kotlin main class's module from its source file, or uses Maven exec", () => {
@@ -202,6 +205,7 @@ test("finds a Kotlin main class's module from its source file, or uses Maven exe
     "mvn compile exec:java -Dexec.mainClass=dev.api.App -Dexec.args=serve",
   );
   assert.deepEqual(maven.env, { MAVEN_OPTS: "-Xmx1g" });
+  assert.equal(maven.build, "mvn compile");
   const missing = resolveRun(
     `<configuration name="Lost" type="Application"><option name="MAIN_CLASS_NAME" value="a.B" /></configuration>`,
     "Lost.run.xml",
@@ -309,6 +313,11 @@ test("detects Android app modules in separate Gradle builds below the repository
     withVariant(byName.app, "interHmgDebug"),
     `${byName.app.command} -PcwVariant=interHmgDebug`,
   );
+  assert.equal(
+    buildCommand(byName.app, "interHmgDebug"),
+    "./gradlew :app:assembleInterHmgDebug",
+  );
+  assert.equal(buildCommand(byName.app), "./gradlew :app:assembleDebug");
   // A standalone module without a settings file is its own build.
   assert.equal(byName.legacy.cwd, path.join(dir, "tools/legacy"));
   assert.match(
