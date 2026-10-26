@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -18,6 +18,12 @@ export interface RunConfiguration {
   /** Names of the configurations a compound configuration starts. */
   compound?: string[];
   reason?: string;
+  /** Android app module: the build variant is chosen at run time (see `withVariant`). */
+  android?: {
+    module: string;
+    /** Command that prints the module's installable variants as `cw-variant <name>` lines. */
+    variants: string;
+  };
 }
 interface XmlNode {
   tag: string;
@@ -97,13 +103,12 @@ export interface BuildModule {
   /** IntelliJ's module name without the source-set suffix, such as `shop.app`. */
   ideName: string;
   android: boolean;
-  applicationId?: string;
 }
 export interface RunContext {
   /** The IntelliJ project directory ($PROJECT_DIR$) that holds the configuration. */
   root: string;
   modules: BuildModule[];
-  /** Gradle init script that adds the task running Application configurations. */
+  /** Gradle init script that adds the tasks running Application and Android configurations. */
   initScript: string;
   exists: (file: string) => boolean;
   env: Record<string, string | undefined>;
@@ -167,50 +172,54 @@ function moduleFor(ctx: RunContext, ideModule = "", mainClass = "") {
 }
 const gradleTask = (module: BuildModule, task: string) =>
   `${module.gradlePath === ":" ? "" : module.gradlePath}:${task}`;
-/** adb from the Android SDK the build uses, falling back to PATH. */
-function adb(ctx: RunContext, module: BuildModule) {
-  const sdks = [ctx.env.ANDROID_HOME, ctx.env.ANDROID_SDK_ROOT];
-  try {
-    const local = readFileSync(
-      path.join(module.buildRoot, "local.properties"),
-      "utf8",
-    );
-    const dir = /^sdk\.dir\s*=\s*(.+)$/m.exec(local)?.[1];
-    if (dir) sdks.unshift(dir.trim().replace(/\\(.)/g, "$1"));
-  } catch {}
-  sdks.push(
-    win
-      ? path.join(ctx.env.LOCALAPPDATA ?? "", "Android", "Sdk")
-      : path.join(
-          os.homedir(),
-          process.platform === "darwin" ? "Library/Android/sdk" : "Android/Sdk",
-        ),
-  );
-  for (const sdk of sdks.filter(Boolean)) {
-    const tool = path.join(sdk!, "platform-tools", win ? "adb.exe" : "adb");
-    if (ctx.exists(tool)) return quote(tool);
-  }
-  return "adb";
-}
-/** Install the debug build, then launch it, as Android Studio's Run does. */
+/** Install a build variant, then launch it, as Android Studio's Run does. */
 function androidRun(
   run: RunConfiguration,
   ctx: RunContext,
   module: BuildModule,
   activity = "",
+  launch = true,
 ) {
   run.cwd = module.buildRoot;
-  const install = `${wrapper(ctx, module.buildRoot, "gradlew", "gradle")} ${gradleTask(module, "installDebug")}`;
-  if (!module.applicationId) {
-    run.command = install;
-    return;
-  }
-  const tool = adb(ctx, module);
-  const launch = activity
-    ? `${tool} shell am start -n ${quote(`${module.applicationId}/${activity}`)}`
-    : `${tool} shell monkey --pct-syskeys 0 -p ${quote(module.applicationId)} -c android.intent.category.LAUNCHER 1`;
-  run.command = `${install} && ${launch}`;
+  const gradle = [
+    wrapper(ctx, module.buildRoot, "gradlew", "gradle"),
+    "--init-script",
+    quote(ctx.initScript),
+    "--no-configuration-cache",
+  ];
+  const project = quote(`-PcwProject=${module.gradlePath}`);
+  run.command = [
+    ...gradle,
+    gradleTask(module, "changesWorkbenchAndroidRun"),
+    project,
+    activity ? quote(`-PcwActivity=${activity}`) : "",
+    launch ? "" : "-PcwLaunch=false",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  run.android = {
+    module: module.dir,
+    variants: [
+      ...gradle,
+      "-q",
+      gradleTask(module, "changesWorkbenchVariants"),
+      project,
+    ].join(" "),
+  };
 }
+/** The command that runs an Android configuration with a build variant such as `freeDebug`. */
+export const withVariant = (run: RunConfiguration, variant?: string) =>
+  run.android && variant
+    ? `${run.command} ${quote(`-PcwVariant=${variant}`)}`
+    : run.command;
+/** Variant names from the output of `android.variants`. */
+export const parseVariants = (output: string) =>
+  [...output.matchAll(/^cw-variant (\S+)\s*$/gm)].map((m) => m[1]);
+/** IntelliJ's default: `debug`, else the first debug variant, else the first one. */
+export const defaultVariant = (variants: string[]) =>
+  variants.includes("debug")
+    ? "debug"
+    : (variants.find((v) => v.endsWith("Debug")) ?? variants[0]);
 
 /** Every configuration in an IntelliJ XML file, resolved into command lines. */
 export function resolveRuns(
@@ -430,8 +439,8 @@ function resolveConfiguration(
         ctx,
         module,
         mode === "specific_activity" ? value(config, "ACTIVITY_CLASS") : "",
+        mode !== "do_nothing",
       );
-      if (mode === "do_nothing") run.command = run.command!.split(" && ")[0];
       break;
     }
     case "CompoundRunConfigurationType":
@@ -509,10 +518,16 @@ export async function findModules(root: string): Promise<BuildModule[]> {
       /rootProject\.name\s*=\s*["']([^"']+)["']/.exec(
         settings.get(buildRoot) ?? "",
       )?.[1] ?? path.basename(buildRoot);
-    const android = file !== "pom.xml" && /android[.-]?application/i.test(text);
-    const id = /\bapplicationId\s*=?\s*["']([^"']+)["']/.exec(text)?.[1];
-    const suffix =
-      /\bapplicationIdSuffix\s*=?\s*["']([^"']+)["']/.exec(text)?.[1] ?? "";
+    // The root build usually declares the plugin with `apply false` for its modules.
+    const android =
+      file !== "pom.xml" &&
+      text
+        .split("\n")
+        .some(
+          (line) =>
+            /android[.-]?application/i.test(line) &&
+            !/\bapply\s*\(?\s*false/.test(line),
+        );
     return {
       dir,
       kind: file === "pom.xml" ? "maven" : "gradle",
@@ -520,11 +535,10 @@ export async function findModules(root: string): Promise<BuildModule[]> {
       gradlePath: segments.length ? `:${segments.join(":")}` : ":",
       ideName: [rootName, ...segments].join("."),
       android,
-      applicationId: id ? id + suffix : undefined,
     } satisfies BuildModule;
   });
 }
-/** The Gradle init script behind Application and Kotlin configurations. */
+/** The Gradle init script behind Application, Kotlin and Android configurations. */
 export const INIT_SCRIPT = `// Changes Workbench: runs an IntelliJ Application configuration on a module's runtime classpath.
 def props = gradle.startParameter.projectProperties
 def split = { String text -> text ? (text =~ /"([^"]*)"|'([^']*)'|(\\S+)/).collect { it[1] ?: it[2] ?: it[3] } : [] }
@@ -547,6 +561,48 @@ allprojects { project ->
       args(split(props.cwArgs))
       jvmArgs(split(props.cwJvmArgs))
       standardInput = System.in
+    }
+  }
+}
+// Android app modules: list the build variants, or install one and launch it like Android Studio.
+allprojects { project ->
+  if (project.path != props.cwProject) return
+  project.pluginManager.withPlugin('com.android.application') {
+    def components = project.extensions.findByName('androidComponents')
+    def ids = [:]
+    if (components != null)
+      components.onVariants(components.selector().all(), { variant -> ids[variant.name] = variant.applicationId } as Action)
+    else
+      project.android.applicationVariants.all { variant -> ids[variant.name] = project.provider { variant.applicationId } }
+    def install = { String name -> 'install' + name.substring(0, 1).toUpperCase() + name.substring(1) }
+    def installable = { ids.keySet().findAll { project.tasks.names.contains(install(it)) }.sort() }
+    def chosen = { ->
+      if (props.cwVariant) return props.cwVariant
+      def names = installable()
+      names.contains('debug') ? 'debug' : names.size() == 1 ? names[0] : null
+    }
+    project.tasks.register('changesWorkbenchVariants') {
+      doLast { installable().each { logger.quiet("cw-variant \$it") } }
+    }
+    project.tasks.register('changesWorkbenchAndroidRun') {
+      dependsOn { def name = chosen(); name && project.tasks.names.contains(install(name)) ? install(name) : [] }
+      doLast {
+        def name = chosen()
+        if (!name || !project.tasks.names.contains(install(name)))
+          throw new GradleException("Choose a build variant of \${project.path}: \${installable().join(', ')}")
+        if (props.cwLaunch == 'false') return
+        def id = ids[name].get()
+        def adb = 'adb'
+        try {
+          adb = components != null ? components.sdkComponents.adb.get().asFile.path : project.android.adbExecutable.path
+        } catch (ignored) {}
+        def command = props.cwActivity
+          ? [adb, 'shell', 'am', 'start', '-n', "\$id/\${props.cwActivity}".toString()]
+          : [adb, 'shell', 'monkey', '--pct-syskeys', '0', '-p', id, '-c', 'android.intent.category.LAUNCHER', '1']
+        logger.lifecycle("Launching \$id (\$name)")
+        if (new ProcessBuilder(command*.toString()).inheritIO().start().waitFor() != 0)
+          throw new GradleException("adb could not launch \$id")
+      }
     }
   }
 }
@@ -592,8 +648,7 @@ export async function loadRuns(
         continue;
       }
       for (const run of resolveRuns(xml, file, project, options)) {
-        if (run.type === "AndroidRunConfigurationType" && run.cwd)
-          androidModules.add(run.command?.split(" && ")[0] ?? "");
+        if (run.android) androidModules.add(run.android.module);
         add(run, project);
       }
     }
@@ -607,8 +662,8 @@ export async function loadRuns(
       cwd: module.buildRoot,
       env: {},
     };
-    androidRun(run, context(module.buildRoot, { modules }), module);
-    if (androidModules.has(run.command!.split(" && ")[0])) continue;
+    if (androidModules.has(module.dir)) continue;
+    androidRun(run, context(module.buildRoot, { modules, initScript }), module);
     if (runs.some((r) => r.name === run.name))
       run.name = path.relative(root, module.dir) || run.name;
     add(run, module.buildRoot);

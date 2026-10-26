@@ -76,6 +76,10 @@ export interface RunInfo {
   detail: string;
   runnable: boolean;
   running: boolean;
+  /** Android apps: the module's build variants (empty until Gradle has listed them). */
+  variants?: string[];
+  variant?: string;
+  loadingVariants?: boolean;
 }
 export interface ViewState {
   intellijKeymap: boolean;
@@ -106,7 +110,9 @@ export type RequestMethod =
   | "rollback"
   | "run"
   | "stopRun"
-  | "selectRun";
+  | "selectRun"
+  | "selectVariant"
+  | "reloadVariants";
 export interface RequestMessage {
   type: "request";
   id: number;

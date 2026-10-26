@@ -905,7 +905,8 @@ export default function App() {
     </main>
   );
 }
-/** IntelliJ's run widget: configuration selector, Run (or Rerun) and Stop. */
+const RELOAD_VARIANTS = "\0reload";
+/** IntelliJ's run widget: configuration and build variant selectors, Run (or Rerun) and Stop. */
 function RunWidget({
   runs,
   selected,
@@ -936,6 +937,35 @@ function RunWidget({
           </option>
         ))}
       </select>
+      {run.variants && (
+        <select
+          aria-label="Build variant"
+          title={`Build variant of '${run.name}'`}
+          value={run.variant ?? ""}
+          onChange={(e) =>
+            void (e.target.value === RELOAD_VARIANTS
+              ? perform("reloadVariants", { name: run.name })
+              : perform("selectVariant", {
+                  name: run.name,
+                  variant: e.target.value,
+                }))
+          }
+        >
+          {!run.variant && (
+            <option value="">
+              {run.loadingVariants ? "Loading variants…" : "No variants"}
+            </option>
+          )}
+          {run.variants.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+          <option value={RELOAD_VARIANTS} disabled={run.loadingVariants}>
+            {run.loadingVariants ? "Reading variants…" : "↻ Reload variants"}
+          </option>
+        </select>
+      )}
       <button
         className="run-button"
         aria-label={`${run.running ? "Rerun" : "Run"} '${run.name}'`}

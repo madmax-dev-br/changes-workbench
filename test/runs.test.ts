@@ -4,9 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  defaultVariant,
   loadRuns,
+  parseVariants,
   resolveRun,
   resolveRuns,
+  withVariant,
   type BuildModule,
 } from "../src/host/runs";
 import { revertChange } from "../src/shared";
@@ -237,9 +240,7 @@ test("reads workspace.xml run configurations, skipping templates", () => {
     root,
     {
       exists: none,
-      modules: [
-        gradleModule("app", { android: true, applicationId: "dev.shop.debug" }),
-      ],
+      modules: [gradleModule("app", { android: true })],
     },
   );
   assert.deepEqual(
@@ -247,7 +248,7 @@ test("reads workspace.xml run configurations, skipping templates", () => {
     [
       [
         "app",
-        "gradle :app:installDebug && adb shell am start -n dev.shop.debug/dev.shop.MainActivity",
+        "gradle --init-script changes-workbench-run.gradle --no-configuration-cache :app:changesWorkbenchAndroidRun -PcwProject=:app -PcwActivity=dev.shop.MainActivity",
       ],
     ],
   );
@@ -266,6 +267,10 @@ test("detects Android app modules in separate Gradle builds below the repository
     'rootProject.name = "Mobile"\ninclude(":app", ":core")\n',
   );
   await write("mobile/gradlew", "#!/bin/sh\n");
+  await write(
+    "mobile/build.gradle.kts",
+    "plugins {\n  alias(libs.plugins.android.application) apply false\n}\n",
+  );
   await write("mobile/local.properties", "sdk.dir=/nowhere/sdk\n");
   await write(
     "mobile/app/build.gradle.kts",
@@ -292,13 +297,24 @@ test("detects Android app modules in separate Gradle builds below the repository
   const byName = Object.fromEntries(runs.map((r) => [r.name, r]));
   assert.deepEqual(Object.keys(byName).sort(), ["Tool", "app", "legacy"]);
   assert.equal(byName.app.cwd, path.join(dir, "mobile"));
-  assert.match(
-    byName.app.command!,
-    /^\.\/gradlew :app:installDebug && \S*adb shell monkey --pct-syskeys 0 -p dev\.mobile\.app\.debug -c android\.intent\.category\.LAUNCHER 1$/,
+  assert.equal(
+    byName.app.command,
+    "./gradlew --init-script /store/run.gradle --no-configuration-cache :app:changesWorkbenchAndroidRun -PcwProject=:app",
+  );
+  assert.equal(
+    byName.app.android!.variants,
+    "./gradlew --init-script /store/run.gradle --no-configuration-cache -q :app:changesWorkbenchVariants -PcwProject=:app",
+  );
+  assert.equal(
+    withVariant(byName.app, "interHmgDebug"),
+    `${byName.app.command} -PcwVariant=interHmgDebug`,
   );
   // A standalone module without a settings file is its own build.
   assert.equal(byName.legacy.cwd, path.join(dir, "tools/legacy"));
-  assert.equal(byName.legacy.command, "gradle :installDebug");
+  assert.match(
+    byName.legacy.command!,
+    /^gradle .* :changesWorkbenchAndroidRun -PcwProject=:$/,
+  );
   assert.match(
     byName.Tool.command!,
     /:core:changesWorkbenchRun .*-PcwMain=dev\.mobile\.Tool/,
@@ -387,4 +403,18 @@ test("rolls back modified, added and deleted hunks like IntelliJ's gutter", () =
       }),
     /refresh/,
   );
+});
+
+test("reads build variants and picks IntelliJ's default", () => {
+  const variants = parseVariants(
+    "> Configure project :app\ncw-variant interHmgDebug\ncw-variant interMockServerDebug\ncw-variant pjMockServerDebug\n",
+  );
+  assert.deepEqual(variants, [
+    "interHmgDebug",
+    "interMockServerDebug",
+    "pjMockServerDebug",
+  ]);
+  assert.equal(defaultVariant(variants), "interHmgDebug");
+  assert.equal(defaultVariant(["release", "debug"]), "debug");
+  assert.equal(defaultVariant([]), undefined);
 });

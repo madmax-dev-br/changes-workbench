@@ -27,7 +27,8 @@ export function parseStatus(data: Buffer): Change[] {
     if (!line) continue;
     if (line.startsWith("? ")) {
       result.push({
-        path: line.slice(2),
+        // A nested repository is listed as `dir/`.
+        path: line.slice(2).replace(/\/$/, ""),
         index: ".",
         worktree: "?",
         status: "?",
@@ -180,6 +181,33 @@ export class GitService {
       throw error;
     }
   }
+  /** A gitlink at `ref` (`:` for the index) as Git's diff shows it: `Subproject commit <sha>`. */
+  private async subproject(ref: string, file: string, signal?: AbortSignal) {
+    if (!ref) return Buffer.alloc(0);
+    const listing = await this.git(
+      ref === ":"
+        ? ["ls-files", "-s", "--", file]
+        : ["ls-tree", ref, "--", file],
+      { signal },
+    ).catch(() => Buffer.alloc(0));
+    const sha = /^160000 (?:commit )?([0-9a-f]{40,64})/m.exec(
+      listing.toString(),
+    )?.[1];
+    return Buffer.from(sha ? `Subproject commit ${sha}\n` : "");
+  }
+  /** The checked-out commit of a submodule or nested repository in the working tree. */
+  private async subprojectHead(file: string, signal?: AbortSignal) {
+    const dir = path.join(this.root, file);
+    try {
+      await fs.stat(path.join(dir, ".git"));
+      const sha = (await run("git", ["rev-parse", "HEAD"], dir, { signal }))
+        .toString()
+        .trim();
+      return Buffer.from(`Subproject commit ${sha}\n`);
+    } catch {
+      return Buffer.alloc(0);
+    }
+  }
   async snapshot(
     file: string,
     scope: Scope = "all",
@@ -193,18 +221,33 @@ export class GitService {
     const oldPath = scope === "unstaged" ? file : (change?.oldPath ?? file);
     const conflicted = change?.status === "U";
     const originalRef = scope === "unstaged" && !conflicted ? ":" : head;
-    const original = await this.blob(
-      originalRef === ":" ? "" : originalRef,
-      oldPath,
-      signal,
+    // Submodules and nested repositories are directories: compare their commits, as `git diff` does.
+    const directory = await fs.stat(path.join(this.root, file)).then(
+      (s) => s.isDirectory(),
+      () => false,
     );
+    const original = directory
+      ? await this.subproject(
+          originalRef === ":" ? "" : originalRef,
+          oldPath,
+          signal,
+        )
+      : await this.blob(
+          originalRef === ":" ? "" : originalRef,
+          oldPath,
+          signal,
+        );
     let base = original;
     if (scope === "unstaged" && !conflicted)
-      base = await this.blobIndex(file, signal);
+      base = directory
+        ? await this.subproject(":", file, signal)
+        : await this.blobIndex(file, signal);
     let current: Buffer;
     let tooLarge = false;
     if (scope === "staged" && !conflicted)
-      current = await this.blobIndex(file, signal);
+      current = directory
+        ? await this.subproject(":", file, signal)
+        : await this.blobIndex(file, signal);
     else {
       const buffer = this.getBuffers().get(path.resolve(this.root, file));
       if (buffer) current = Buffer.from(buffer.text);
@@ -215,6 +258,8 @@ export class GitService {
             current = Buffer.from(
               await fs.readlink(path.join(this.root, file)),
             );
+          else if (stat.isDirectory())
+            current = await this.subprojectHead(file, signal);
           else if (stat.size > 5 * 1024 * 1024) {
             current = Buffer.alloc(0);
             tooLarge = true;

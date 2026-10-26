@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Build variants for Android apps, as in Android Studio: selecting an Android app shows a combo box with the module's variants (product flavors × build types), read from Gradle and remembered per configuration. ▶ installs that variant and launches it with its own application ID, so projects with flavors no longer fail with "task 'installDebug' is ambiguous". Also **Changes: Select Build Variant…** in the Command Palette.
+- Root build files that only declare the Android plugin with `apply false` are no longer listed as apps.
+- Submodules and nested Git repositories open as a `Subproject commit` diff instead of failing with "EISDIR: illegal operation on a directory".
+
 ## 0.3.0
 
 - Application, Kotlin and Spring Boot run configurations now run: their main class is compiled and started on the module's runtime classpath through Gradle (or Maven), with program arguments, VM options, working directory and environment.

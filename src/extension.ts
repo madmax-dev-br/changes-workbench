@@ -9,7 +9,14 @@ import { Navigator } from "./host/navigation";
 import { DeepManager } from "./host/deep";
 import { ReviewStore } from "./host/reviews";
 import { findExecutable } from "./host/dependencies";
-import { INIT_SCRIPT, loadRuns, type RunConfiguration } from "./host/runs";
+import {
+  INIT_SCRIPT,
+  defaultVariant,
+  loadRuns,
+  parseVariants,
+  withVariant,
+  type RunConfiguration,
+} from "./host/runs";
 import {
   languageOf,
   revertChange,
@@ -68,6 +75,9 @@ class Workbench {
   private executions = new Map<string, vscode.TaskExecution>();
   /** Run configurations per root; rereading walks the tree for Gradle/Maven modules. */
   private runCache = new Map<string, Promise<RunConfiguration[]>>();
+  /** Gradle reads of Android build variants in progress, and modules whose read failed, by module. */
+  private variantLoads = new Map<string, Promise<string[]>>();
+  private variantFailures = new Set<string>();
   constructor(private context: vscode.ExtensionContext) {
     this.reviews = new ReviewStore(
       context.workspaceState.get("reviews", {}),
@@ -118,6 +128,7 @@ class Workbench {
     );
     command("run", () => this.runSelected());
     command("selectRun", () => this.pickRun());
+    command("selectVariant", () => this.pickVariant());
     this.runStatus.command = "changesWorkbench.run";
     // Run configurations launch as tasks, so the terminal panel shows and stops them.
     this.disposables.push(
@@ -394,6 +405,7 @@ class Workbench {
       )
     ) {
       this.runCache.clear();
+      this.variantFailures.clear();
       void this.updateRuns();
     }
     this.epoch++;
@@ -716,6 +728,19 @@ class Workbench {
           str("name"),
         );
         return this.updateRuns();
+      case "selectVariant":
+        await this.context.workspaceState.update(
+          `variant:${this.root}\0${str("name")}`,
+          str("variant"),
+        );
+        return this.updateRuns();
+      case "reloadVariants": {
+        const config = (await this.loadRuns(this.root)).find(
+          (r) => r.name === str("name"),
+        );
+        if (config?.android) await this.loadVariants(config, true);
+        return;
+      }
       case "layout": {
         const layout = str("layout");
         if (!["sideBySide", "unified"].includes(layout))
@@ -775,15 +800,132 @@ class Workbench {
     if (!dirty) await document.save();
   }
   private async runInfos(root: string): Promise<RunInfo[]> {
-    return (await this.loadRuns(root)).map((r) => ({
-      name: r.name,
-      type: r.type,
-      detail: r.compound
-        ? `Compound: ${r.compound.join(", ")}`
-        : (r.command ?? r.reason ?? ""),
-      runnable: Boolean(r.command || r.compound?.length),
-      running: this.executions.has(`${root}\0${r.name}`),
-    }));
+    return (await this.loadRuns(root)).map((r) => {
+      const variant = this.variant(root, r);
+      return {
+        name: r.name,
+        type: r.type,
+        detail: r.compound
+          ? `Compound: ${r.compound.join(", ")}`
+          : (withVariant(r, variant) ?? r.reason ?? ""),
+        runnable: Boolean(r.command || r.compound?.length),
+        running: this.executions.has(`${root}\0${r.name}`),
+        ...(r.android && {
+          variants: this.cachedVariants(r) ?? [],
+          variant,
+          loadingVariants: this.variantLoads.has(r.android.module),
+        }),
+      };
+    });
+  }
+  /** Build variants of an Android run's module, as last read from Gradle. */
+  private cachedVariants(run: RunConfiguration) {
+    return run.android
+      ? this.context.workspaceState.get<string[]>(
+          `variants:${run.android.module}`,
+        )
+      : undefined;
+  }
+  /** The variant chosen for an Android run, or IntelliJ's default. */
+  private variant(root: string, run: RunConfiguration) {
+    const variants = this.cachedVariants(run);
+    if (!variants) return undefined;
+    const saved = this.context.workspaceState.get<string>(
+      `variant:${root}\0${run.name}`,
+    );
+    return saved && variants.includes(saved) ? saved : defaultVariant(variants);
+  }
+  /** Ask Gradle for the module's installable variants (configuring the build can take a while). */
+  private loadVariants(
+    config: RunConfiguration,
+    fresh = false,
+  ): Promise<string[]> {
+    const { module, variants } = config.android!;
+    const cached = this.cachedVariants(config);
+    if (cached && !fresh) return Promise.resolve(cached);
+    let load = this.variantLoads.get(module);
+    if (load) return load;
+    this.variantFailures.delete(module);
+    load = (async () => {
+      await this.writeInitScript();
+      const output = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Window,
+          title: `Reading build variants of ${config.name}`,
+        },
+        () =>
+          run(
+            process.platform === "win32" ? "cmd.exe" : "/bin/sh",
+            process.platform === "win32"
+              ? ["/d", "/s", "/c", variants]
+              : ["-c", variants],
+            config.cwd,
+            { env: config.env, timeout: 15 * 60_000 },
+          ),
+      );
+      const found = parseVariants(output.toString());
+      await this.context.workspaceState.update(`variants:${module}`, found);
+      return found;
+    })();
+    this.variantLoads.set(module, load);
+    void load
+      .catch((e) => {
+        this.variantFailures.add(module);
+        this.log.appendLine(`Build variants of ${config.name}: ${e}`);
+        void vscode.window
+          .showErrorMessage(
+            `Could not read the build variants of '${config.name}'.`,
+            "Show Log",
+          )
+          .then((choice) => choice && this.log.show());
+      })
+      .finally(() => {
+        this.variantLoads.delete(module);
+        void this.updateRuns();
+      });
+    void this.updateRuns();
+    return load;
+  }
+  private async pickVariant(): Promise<void> {
+    try {
+      await this.ensureRoot();
+      const root = this.root;
+      const name = this.selectedRun(root, await this.runInfos(root));
+      const run = (await this.loadRuns(root)).find((r) => r.name === name);
+      if (!run?.android) {
+        vscode.window.showInformationMessage(
+          "The selected run configuration is not an Android app.",
+        );
+        return;
+      }
+      const reload = "$(refresh) Reload build variants";
+      const current = this.variant(root, run);
+      const variants = await this.loadVariants(run);
+      const picked = await vscode.window.showQuickPick(
+        [
+          ...variants.map((label) => ({
+            label,
+            description: label === current ? "selected" : undefined,
+          })),
+          { label: reload },
+        ],
+        { title: `Build variant of '${run.name}'` },
+      );
+      if (!picked) return;
+      if (picked.label === reload) {
+        await this.loadVariants(run, true);
+        return this.pickVariant();
+      }
+      await this.context.workspaceState.update(
+        `variant:${root}\0${run.name}`,
+        picked.label,
+      );
+      await this.updateRuns();
+    } catch (e) {
+      vscode.window.showErrorMessage(
+        e instanceof Error ? e.message : String(e),
+      );
+    }
   }
   private selectedRun(root: string, runs: RunInfo[]) {
     const saved = this.context.workspaceState.get<string>(
@@ -809,8 +951,24 @@ class Workbench {
         "changesWorkbench.hasRuns",
         runs.length > 0,
       );
+      void vscode.commands.executeCommand(
+        "setContext",
+        "changesWorkbench.androidRun",
+        Boolean(selected?.variants),
+      );
+      // Android Studio knows the variants after a sync; read them once the app is selected.
+      const config = (await this.loadRuns(root)).find(
+        (r) => r.name === selected?.name,
+      );
+      if (
+        config?.android &&
+        !this.cachedVariants(config) &&
+        !this.variantLoads.has(config.android.module) &&
+        !this.variantFailures.has(config.android.module)
+      )
+        void this.loadVariants(config).catch(() => {});
       if (selected) {
-        this.runStatus.text = `$(${selected.running ? "debug-restart" : "play"}) ${selected.name}`;
+        this.runStatus.text = `$(${selected.running ? "debug-restart" : "play"}) ${selected.name}${selected.variant ? ` · ${selected.variant}` : ""}`;
         this.runStatus.tooltip = `${selected.running ? "Rerun" : "Run"} '${selected.name}'\n${selected.detail}`;
         this.runStatus.show();
       } else this.runStatus.hide();
@@ -895,10 +1053,11 @@ class Workbench {
       return;
     }
     if (!run.command) throw new Error(run.reason);
-    if (run.command.includes(this.initScript)) {
-      await fs.mkdir(path.dirname(this.initScript), { recursive: true });
-      await fs.writeFile(this.initScript, INIT_SCRIPT);
-    }
+    if (run.android)
+      // Without the variant list Gradle falls back to `debug` or names the variants to choose from.
+      await this.loadVariants(run).catch(() => {});
+    const command = withVariant(run, this.variant(root, run))!;
+    if (command.includes(this.initScript)) await this.writeInitScript();
     // Like IntelliJ's Rerun: stop the running instance first.
     const key = `${root}\0${name}`;
     const running = this.executions.get(key);
@@ -918,16 +1077,20 @@ class Workbench {
       running.terminate();
       await ended;
     }
-    await vscode.tasks.executeTask(this.task(root, run));
+    await vscode.tasks.executeTask(this.task(root, run, command));
   }
-  private task(root: string, run: RunConfiguration) {
+  private async writeInitScript() {
+    await fs.mkdir(path.dirname(this.initScript), { recursive: true });
+    await fs.writeFile(this.initScript, INIT_SCRIPT);
+  }
+  private task(root: string, run: RunConfiguration, command: string) {
     const task = new vscode.Task(
       { type: "changesWorkbench", name: run.name, root },
       vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root)) ??
         vscode.TaskScope.Workspace,
       run.name,
       "Run",
-      new vscode.ShellExecution(run.command!, {
+      new vscode.ShellExecution(command, {
         cwd: run.cwd,
         env: run.env,
       }),
