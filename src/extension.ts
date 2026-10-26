@@ -94,6 +94,10 @@ class Workbench {
   private executions = new Map<string, vscode.TaskExecution>();
   /** Run configurations per root; rereading walks the tree for Gradle/Maven modules. */
   private runCache = new Map<string, Promise<RunConfiguration[]>>();
+  /** The last run configurations read per root, shown while a newer read is in progress. */
+  private runResults = new Map<string, RunConfiguration[]>();
+  /** The last view per root and scope, shown at once while the panel reloads. */
+  private lastStates = new Map<string, ViewState>();
   /** Gradle reads of Android build variants in progress, and modules whose read failed, by module. */
   private variantLoads = new Map<string, Promise<string[]>>();
   private variantFailures = new Set<string>();
@@ -150,7 +154,11 @@ class Workbench {
     command("selectVariant", () => this.pickVariant());
     for (const name of ["searchEverywhere", "findInFiles"])
       command(name, async () => {
-        if (this.panel?.visible) return this.send("command", name);
+        // The webview is kept while hidden, so a revealed panel gets the command directly.
+        if (this.panel) {
+          this.panel.reveal();
+          return this.send("command", name);
+        }
         this.pendingCommand = name;
         await this.open();
       });
@@ -361,6 +369,7 @@ class Workbench {
       () => this.buffers(),
       cfg.get<number>("cacheMiB", 64) * 1024 * 1024,
     );
+    navigation.ripgrep = this.ripgrep;
     const git = new GitService(root, () => this.buffers());
     const deep = new DeepManager(
       root,
@@ -442,7 +451,8 @@ class Workbench {
       if (uri?.scheme === "file" && type) s.deep.fileChanged(uri.fsPath, type);
     }
     clearTimeout(this.refreshTimer);
-    if (this.panel)
+    // A hidden panel refreshes when it is shown again.
+    if (this.panel?.visible)
       this.refreshTimer = setTimeout(
         () =>
           void this.refresh().catch((e) =>
@@ -459,28 +469,35 @@ class Workbench {
     const root = this.root,
       scope = this.scope;
     const changes = await service.git.changes(scope);
-    for (const change of changes)
-      if (this.reviews.has(root, scope, change.path)) {
-        try {
-          const snap = await service.git.snapshot(
-            change.path,
-            scope,
-            undefined,
-            change,
-          );
-          change.reviewed = this.reviews.matches(
-            root,
-            scope,
-            change.path,
-            snap.fingerprint,
-          );
-        } catch {
-          change.reviewed = false;
-        }
-      }
+    await Promise.all(
+      changes
+        .filter((change) => this.reviews.has(root, scope, change.path))
+        .map(async (change) => {
+          try {
+            const snap = await service.git.snapshot(
+              change.path,
+              scope,
+              undefined,
+              change,
+            );
+            change.reviewed = this.reviews.matches(
+              root,
+              scope,
+              change.path,
+              snap.fingerprint,
+            );
+          } catch {
+            change.reviewed = false;
+          }
+        }),
+    );
     if (epoch !== this.epoch || root !== this.root || scope !== this.scope)
       return;
-    const runs = await this.runInfos(root);
+    // Run configurations come later through the `runs` event when they are not read yet:
+    // walking a large repository for modules must not hold up the change list.
+    const loaded = this.runResults.get(root);
+    const runs = loaded ? this.runInfosFrom(root, loaded) : [];
+    if (!loaded) void this.updateRuns();
     const state: ViewState = {
       intellijKeymap: vscode.workspace
         .getConfiguration("changesWorkbench")
@@ -508,6 +525,7 @@ class Workbench {
           .get("diffLayout", "sideBySide"),
       ),
     };
+    this.lastStates.set(`${root}\0${scope}`, state);
     this.send("state", state);
     return state;
   }
@@ -525,7 +543,8 @@ class Workbench {
         vscode.ViewColumn.One,
         {
           enableScripts: true,
-          retainContextWhenHidden: false,
+          // Switching back to the tab should not reload the diff and the change tree.
+          retainContextWhenHidden: true,
           localResourceRoots: [
             vscode.Uri.joinPath(this.context.extensionUri, "dist"),
           ],
@@ -630,6 +649,9 @@ class Workbench {
     const service = this.current;
     switch (request.method) {
       case "refresh": {
+        // Show the last view at once; the fresh one replaces it when Git answers.
+        const last = this.lastStates.get(`${this.root}\0${this.scope}`);
+        if (last) this.send("state", last);
         const state = await this.refresh();
         if (this.pendingCommand) this.send("command", this.pendingCommand);
         this.pendingCommand = undefined;
@@ -908,7 +930,10 @@ class Workbench {
     if (!dirty) await document.save();
   }
   private async runInfos(root: string): Promise<RunInfo[]> {
-    return (await this.loadRuns(root)).map((r) => {
+    return this.runInfosFrom(root, await this.loadRuns(root));
+  }
+  private runInfosFrom(root: string, runs: RunConfiguration[]): RunInfo[] {
+    return runs.map((r) => {
       const variant = this.variant(root, r);
       return {
         name: r.name,
@@ -1039,11 +1064,9 @@ class Workbench {
     const saved = this.context.workspaceState.get<string>(
       `selectedRun:${root}`,
     );
-    return (
-      runs.find((r) => r.name === saved) ??
-      runs.find((r) => r.runnable) ??
-      runs[0]
-    )?.name;
+    // Nothing is selected until the user picks a configuration: selecting one can be costly
+    // (an Android app reads its build variants from Gradle).
+    return runs.find((r) => r.name === saved)?.name;
   }
   /** Refresh the status bar run button and the panel's run widget. */
   private async updateRuns() {
@@ -1075,7 +1098,11 @@ class Workbench {
         !this.variantFailures.has(config.android.module)
       )
         void this.loadVariants(config).catch(() => {});
-      if (selected) {
+      if (!selected && runs.length) {
+        this.runStatus.text = "$(play) Select Run Configuration";
+        this.runStatus.tooltip = "Choose a run configuration";
+        this.runStatus.show();
+      } else if (selected) {
         this.runStatus.text = `$(${selected.running ? "debug-restart" : "play"}) ${selected.name}${selected.variant ? ` · ${selected.variant}` : ""}`;
         this.runStatus.tooltip = `${selected.running ? "Rerun" : "Run"} '${selected.name}'\n${selected.detail}`;
         this.runStatus.show();
@@ -1091,6 +1118,7 @@ class Workbench {
       const runs = await this.runInfos(this.root);
       const name = this.selectedRun(this.root, runs);
       if (name) await this.startRun(this.root, name);
+      else if (runs.length) await this.pickRun();
       else
         vscode.window.showInformationMessage(
           "No run configurations or Android app modules found.",
@@ -1144,6 +1172,7 @@ class Workbench {
     if (!runs || fresh) {
       runs = loadRuns(root, this.initScript);
       this.runCache.set(root, runs);
+      runs.then((r) => this.runResults.set(root, r)).catch(() => {});
       runs.catch(() => this.runCache.delete(root));
     }
     return runs;

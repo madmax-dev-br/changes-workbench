@@ -4,6 +4,9 @@
 
 - Search Everywhere, as in IntelliJ: press `Shift` twice in the workbench to search classes, files, symbols (functions and methods), actions and text, with camel-hump matching and **All / Classes / Files / Symbols / Actions / Text** tabs.
 - Find in Files (`⌘⇧F` / `Ctrl+Shift+F`): text search across the repository with a live preview of each match, match case, whole words, regular expressions and a file mask.
+- Go to definition reaches Kotlin extension functions and properties (`total.toMoney()`, `name.initials`) when they are imported or in the same package, including in large projects where the extension is used in many files, in new files not yet committed, and in files with a comment right after the `package` line.
+- Faster Changes view: the panel stays loaded when you switch tabs, reopening shows the last change list at once while Git refreshes, and run configurations no longer hold up the change list.
+- No run configuration is selected until you pick one, so opening the workbench never starts a Gradle read for an Android app. ▶ in the status bar asks which configuration to run.
 
 ## 0.4.0
 

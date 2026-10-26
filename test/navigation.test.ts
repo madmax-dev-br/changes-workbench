@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { Navigator } from "../src/host/navigation";
 async function setup() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "changes-nav-"));
@@ -150,4 +151,55 @@ test("related files cover targets, imports and packages in priority order", asyn
     k + "tax/Tax.kt",
     k + "pricing/Policy.kt",
   ]);
+});
+test("member calls resolve to imported or same-package extension functions and properties", async (t) => {
+  const { root, nav } = await setup();
+  t.after(async () => {
+    nav.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const rg = path.resolve(
+    ".dev/cursor/Cursor.app/Contents/Resources/app/node_modules/@vscode/ripgrep/bin/rg",
+  );
+  if (existsSync(rg)) nav.ripgrep = rg;
+  const write = async (file: string, text: string) => {
+    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await fs.writeFile(path.join(root, file), text);
+  };
+  await write(
+    "core/src/demo/util/Money.kt",
+    // The KDoc right after the package line once leaked into the package name.
+    'package demo.util\n\n/** Formats an amount as money. */\nfun Double.toMoney(): String = "$" + this\n\nval String.initials: String get() = take(1)\n',
+  );
+  await write(
+    "app/src/demo/app/Local.kt",
+    "package demo.app\n\nfun Int.padded() = toString().padStart(3, '0')\n",
+  );
+  // A widely used extension: callers in the same folder must not crowd out its declaration.
+  for (let i = 0; i < 40; i++)
+    await write(
+      `app/src/demo/app/Screen${i}.kt`,
+      `package demo.app\n\nimport demo.util.toMoney\n\nfun screen${i}(v: Double) = v.toMoney()\n`,
+    );
+  const source =
+    "package demo.app\n\nimport demo.util.toMoney\nimport demo.util.initials\n\nfun show(total: Double, name: String) {\n    println(total.toMoney() + name.initials + 7.padded())\n}\n";
+  const line = source.split("\n")[6];
+  for (const [word, target] of [
+    ["toMoney", "core/src/demo/util/Money.kt:3"],
+    ["initials", "core/src/demo/util/Money.kt:5"],
+    ["padded", "app/src/demo/app/Local.kt:2"],
+  ]) {
+    const result = await nav.resolve(
+      "app/src/demo/app/Show.kt",
+      source,
+      6,
+      line.indexOf(word) + 1,
+    );
+    assert.equal(result.confidence, "import", word);
+    assert.deepEqual(
+      result.candidates.map((c) => `${c.path}:${c.line}`),
+      [target],
+      word,
+    );
+  }
 });

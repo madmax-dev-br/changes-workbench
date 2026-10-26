@@ -997,15 +997,16 @@ function RunWidget({
   ) => Promise<unknown>;
 }) {
   if (!runs.length) return null;
-  const run = runs.find((r) => r.name === selected) ?? runs[0];
+  const run = runs.find((r) => r.name === selected);
   return (
     <div className="run-widget">
       <select
         aria-label="Run configuration"
-        title={run.detail}
-        value={run.name}
+        title={run?.detail ?? "Select a run configuration"}
+        value={run?.name ?? ""}
         onChange={(e) => void perform("selectRun", { name: e.target.value })}
       >
+        <option value="">Select configuration…</option>
         {runs.map((r) => (
           <option key={r.name} value={r.name}>
             {r.running ? "● " : ""}
@@ -1014,7 +1015,7 @@ function RunWidget({
           </option>
         ))}
       </select>
-      {run.variants && (
+      {run?.variants && (
         <select
           aria-label="Build variant"
           title={`Build variant of '${run.name}'`}
@@ -1045,18 +1046,22 @@ function RunWidget({
       )}
       <button
         className="run-button"
-        aria-label={`${run.running ? "Rerun" : "Run"} '${run.name}'`}
-        title={
-          run.runnable
-            ? `${run.running ? "Rerun" : "Run"} '${run.name}'\n${run.detail}`
-            : run.detail
+        aria-label={
+          run ? `${run.running ? "Rerun" : "Run"} '${run.name}'` : "Run"
         }
-        disabled={!run.runnable}
-        onClick={() => void perform("run", { name: run.name })}
+        title={
+          !run
+            ? "Select a run configuration"
+            : run.runnable
+              ? `${run.running ? "Rerun" : "Run"} '${run.name}'\n${run.detail}`
+              : run.detail
+        }
+        disabled={!run?.runnable}
+        onClick={() => run && void perform("run", { name: run.name })}
       >
-        <Icon name={run.running ? "rerun" : "play"} size={15} />
+        <Icon name={run?.running ? "rerun" : "play"} size={15} />
       </button>
-      {run.running && (
+      {run?.running && (
         <button
           className="stop-button"
           aria-label={`Stop '${run.name}'`}

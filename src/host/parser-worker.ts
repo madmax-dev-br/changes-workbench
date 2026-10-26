@@ -50,10 +50,9 @@ async function parse(file: string, source: string): Promise<ParsedFile> {
   ]);
   function visit(node: Parser.SyntaxNode) {
     if (node.type === "package_header" || node.type === "package_declaration")
-      packageName = node.text
-        .replace(/^package\s+/, "")
-        .replace(/;\s*$/, "")
-        .trim();
+      // Kotlin's package_header can extend over a following comment: keep only the name.
+      packageName =
+        /^package\s+([\w.`]+)/.exec(node.text)?.[1]?.replace(/`/g, "") ?? "";
     if (node.type === "import_header" || node.type === "import_declaration") {
       const clean = node.text
         .replace(/^import\s+(?:static\s+)?/, "")
@@ -85,9 +84,15 @@ async function parse(file: string, source: string): Promise<ParsedFile> {
             : scopes.has(scope.type))
         )
           scope = scope.parent;
+        // Kotlin keeps `val String.initials: String` in a property_declaration around the name.
+        const owner =
+          node.type === "variable_declaration" &&
+          node.parent?.type === "property_declaration"
+            ? node.parent
+            : node;
         const before = source.slice(
-          Math.max(0, node.startIndex - 4000),
-          node.startIndex,
+          Math.max(0, owner.startIndex - 4000),
+          owner.startIndex,
         );
         const docs =
           before
@@ -101,8 +106,11 @@ async function parse(file: string, source: string): Promise<ParsedFile> {
           );
         const signature = source
           .slice(
-            node.startIndex,
-            Math.min(body?.startIndex ?? node.endIndex, node.startIndex + 500),
+            owner.startIndex,
+            Math.min(
+              body?.startIndex ?? owner.endIndex,
+              owner.startIndex + 500,
+            ),
           )
           .trim()
           .split("\n")
@@ -110,7 +118,12 @@ async function parse(file: string, source: string): Promise<ParsedFile> {
           .join("\n");
         symbols.push({
           name: name.text.replace(/`/g, ""),
-          kind: node.type.replace(/_declaration|_declarator/g, ""),
+          // Top-level and member properties can be navigated to from other files; locals cannot.
+          kind:
+            owner !== node &&
+            ["class_body", "source_file"].includes(scope?.type ?? "")
+              ? "property"
+              : node.type.replace(/_declaration|_declarator/g, ""),
           path: file,
           line: name.startPosition.row,
           column: name.startPosition.column,
@@ -123,8 +136,8 @@ async function parse(file: string, source: string): Promise<ParsedFile> {
           documentation: docs,
           preview: source
             .slice(
-              node.startIndex,
-              Math.min(node.endIndex, node.startIndex + 1800),
+              owner.startIndex,
+              Math.min(owner.endIndex, owner.startIndex + 1800),
             )
             .split("\n")
             .slice(0, 20)

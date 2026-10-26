@@ -9,6 +9,22 @@ interface CacheEntry {
   parsed: ParsedFile;
   bytes: number;
 }
+const escape = (word: string) => word.replace(/[$]/g, "\\$&");
+/** A line declaring `word` in Kotlin (including extensions such as `fun Double.toMoney`) or Java. */
+export const declarationPattern = (word: string) =>
+  String.raw`(?:\b(?:fun|va[lr]|class|interface|object|typealias)\b[^=(\n]*?[\s.]` +
+  escape(word) +
+  String.raw`\b|\b[\w>\]]+\s+` +
+  escape(word) +
+  String.raw`\s*[(;=])`;
+/** `fun Double.toMoney()` or `val String.initials`: declared on a receiver type. */
+const isExtension = (symbol: SymbolInfo, word: string) =>
+  new RegExp(
+    String.raw`\b(?:fun|va[lr])\b[^(=:]*\.\s*` +
+      "`?" +
+      escape(word) +
+      String.raw`\b`,
+  ).test(symbol.signature);
 export class Navigator {
   private worker?: Worker;
   private nextId = 0;
@@ -21,6 +37,8 @@ export class Navigator {
   private bytes = 0;
   private files?: Promise<string[]>;
   public stats = { parses: 0, hits: 0, filesListed: 0, searches: 0 };
+  /** ripgrep from VS Code or Cursor; Git's grep is used without it. */
+  public ripgrep?: string;
   constructor(
     private root: string,
     private dist: string,
@@ -151,6 +169,48 @@ export class Navigator {
     this.files = undefined;
     this.answers.clear();
   }
+  /** Kotlin and Java files containing `pattern` (a regex when `regex`, else a whole word). */
+  private async grep(pattern: string, regex: boolean, signal?: AbortSignal) {
+    const globs = ["*.kt", "*.kts", "*.java"];
+    try {
+      const out = this.ripgrep
+        ? await run(
+            this.ripgrep,
+            [
+              "-l",
+              "--null",
+              "--no-messages",
+              ...globs.flatMap((g) => ["-g", g]),
+              ...(regex ? ["-e", pattern] : ["-F", "-w", "-e", pattern]),
+              "./",
+            ],
+            this.root,
+            { signal, timeout: 5000, maxBytes: 4 * 1024 * 1024 },
+          )
+        : await run(
+            "git",
+            [
+              "grep",
+              "-l",
+              "-z",
+              "--untracked",
+              ...(regex ? ["-P", "-e", pattern] : ["-F", "-w", "-e", pattern]),
+              "--",
+              ...globs,
+            ],
+            this.root,
+            { signal, timeout: 5000, maxBytes: 4 * 1024 * 1024 },
+          );
+      return out
+        .toString()
+        .split("\0")
+        .filter(Boolean)
+        .map((f) => f.replace(/^\.\//, ""));
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      return [];
+    }
+  }
   async listFiles() {
     this.files ??= run(
       "git",
@@ -264,33 +324,25 @@ export class Navigator {
     let candidates = files.filter((f) =>
       wantedNames.has(path.basename(f).replace(/\.(kt|kts|java)$/, "")),
     );
+    // Files that declare the name come first: a widely used extension function is mentioned in
+    // far more files than the 24 parsed below.
+    let declaring: string[] = [];
     if (candidates.length < 16) {
       this.stats.searches++;
-      try {
-        const matches = (
-          await run(
-            "git",
-            ["grep", "-l", "-z", "-F", word, "--", "*.kt", "*.kts", "*.java"],
-            this.root,
-            { signal, timeout: 2000, maxBytes: 1024 * 1024 },
-          )
-        )
-          .toString()
-          .split("\0")
-          .filter(Boolean);
-        candidates.push(...matches);
-      } catch (e) {
-        if (signal?.aborted) throw e;
-      }
+      declaring = await this.grep(declarationPattern(word), true, signal);
+      candidates.push(...declaring);
+      if (!declaring.length)
+        candidates.push(...(await this.grep(word, false, signal)));
     }
     candidates = [...new Set(candidates)].filter((f) => f !== file);
-    candidates.sort(
-      (a, b) =>
-        Number(!a.startsWith(path.dirname(file))) -
-        Number(!b.startsWith(path.dirname(file))),
-    );
+    const rank = (f: string) =>
+      (declaring.includes(f) ? 0 : 2) +
+      (f.startsWith(path.dirname(file)) ? 0 : 1);
+    candidates.sort((a, b) => rank(a) - rank(b));
     const definitions: SymbolInfo[] = [];
     let imported: SymbolInfo[] = [];
+    // `total.toMoney()`: an extension imported (or declared in this package) is the answer.
+    const extensions: SymbolInfo[] = [];
     for (const other of candidates.slice(0, 24)) {
       if (signal?.aborted) throw new Error("Cancelled");
       try {
@@ -302,14 +354,16 @@ export class Navigator {
           )
             continue;
           definitions.push(symbol);
-          if (
-            imports.some(
-              (i) =>
-                i.path === `${result.packageName}.${symbol.name}` ||
-                i.path === `${result.packageName}.*`,
-            )
-          )
-            imported.push(symbol);
+          const isImported = imports.some(
+            (i) =>
+              i.path === `${result.packageName}.${symbol.name}` ||
+              i.path === `${result.packageName}.*`,
+          );
+          if (isImported) imported.push(symbol);
+          const visible =
+            isImported || result.packageName === parsed.packageName;
+          if (memberAccess && visible && isExtension(symbol, word))
+            extensions.push(symbol);
         }
       } catch (e) {
         if (signal?.aborted) throw e;
@@ -320,6 +374,12 @@ export class Navigator {
         word,
         candidates: imported,
         confidence: imported.length === 1 ? "import" : "candidate",
+      };
+    if (extensions.length)
+      return {
+        word,
+        candidates: extensions,
+        confidence: extensions.length === 1 ? "import" : "candidate",
       };
     return {
       word,
