@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import path from "node:path";
 import { watch, type FSWatcher } from "node:fs";
+import fs from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { run } from "./host/process";
 import { GitService, inside, type Buffers } from "./host/git";
@@ -8,8 +9,12 @@ import { Navigator } from "./host/navigation";
 import { DeepManager } from "./host/deep";
 import { ReviewStore } from "./host/reviews";
 import { findExecutable } from "./host/dependencies";
+import { loadRuns, type RunConfiguration } from "./host/runs";
 import {
   languageOf,
+  revertChange,
+  type LineChange,
+  type RunInfo,
   type Scope,
   type Snapshot,
   type ViewState,
@@ -55,6 +60,12 @@ class Workbench {
     vscode.StatusBarAlignment.Left,
     9,
   );
+  private runStatus = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    8,
+  );
+  /** Running run configurations, keyed by `root\0name`. */
+  private executions = new Map<string, vscode.TaskExecution>();
   constructor(private context: vscode.ExtensionContext) {
     this.reviews = new ReviewStore(
       context.workspaceState.get("reviews", {}),
@@ -103,6 +114,28 @@ class Workbench {
     command("followDefinition", (file: string, line: number, column: number) =>
       this.openLocation(file, line, column),
     );
+    command("run", () => this.runSelected());
+    command("selectRun", () => this.pickRun());
+    this.runStatus.command = "changesWorkbench.run";
+    // Run configurations launch as tasks, so the terminal panel shows and stops them.
+    this.disposables.push(
+      this.runStatus,
+      vscode.tasks.onDidStartTask((e) => {
+        const d = e.execution.task.definition;
+        if (d.type !== "changesWorkbench") return;
+        this.executions.set(`${d.root}\0${d.name}`, e.execution);
+        void this.updateRuns();
+      }),
+      vscode.tasks.onDidEndTask((e) => {
+        const d = e.execution.task.definition;
+        if (d.type !== "changesWorkbench") return;
+        const key = `${d.root}\0${d.name}`;
+        if (this.executions.get(key) === e.execution)
+          this.executions.delete(key);
+        void this.updateRuns();
+      }),
+    );
+    void this.updateRuns();
     this.status.text = "$(git-compare) Changes";
     this.status.command = "changesWorkbench.open";
     this.status.tooltip = "Open Changes Workbench";
@@ -352,6 +385,11 @@ class Workbench {
     return roots.length ? this.services.get(roots[0]) : undefined;
   }
   private changed(uri?: vscode.Uri, type?: 1 | 2 | 3) {
+    if (
+      uri &&
+      /[\\/](\.run|runConfigurations)[\\/][^\\/]+\.xml$/.test(uri.fsPath)
+    )
+      void this.updateRuns();
     this.epoch++;
     this.snapshots.clear();
     this.nativeBlameCache.clear();
@@ -398,10 +436,13 @@ class Workbench {
       }
     if (epoch !== this.epoch || root !== this.root || scope !== this.scope)
       return;
+    const runs = await this.runInfos(root);
     const state: ViewState = {
       intellijKeymap: vscode.workspace
         .getConfiguration("changesWorkbench")
         .get("intellijKeymap", true),
+      runs,
+      selectedRun: this.selectedRun(root, runs),
       repos: [...this.services.keys()].map((root) => ({
         root,
         name: path.basename(root),
@@ -551,6 +592,7 @@ class Workbench {
         if (!this.services.has(root)) throw new Error("Unknown repository");
         this.root = root;
         this.snapshots.clear();
+        void this.updateRuns();
         return this.refresh();
       }
       case "scope": {
@@ -629,6 +671,45 @@ class Workbench {
         return this.chooseTheme();
       case "configureDeep":
         return this.configureDeep();
+      case "rollback": {
+        const file = str("path");
+        const snapshot = this.snapshots.get(file);
+        if (!snapshot || snapshot.version !== request.version)
+          throw new Error("File changed; refresh the view");
+        if (snapshot.scope === "staged" || snapshot.conflicted)
+          throw new Error(
+            snapshot.conflicted
+              ? "Resolve the conflict in the editor first."
+              : "Rollback works on working tree changes; switch to All changes or Unstaged.",
+          );
+        const c = (p.change ?? {}) as Record<string, unknown>;
+        const change = Object.fromEntries(
+          [
+            "originalStartLineNumber",
+            "originalEndLineNumber",
+            "modifiedStartLineNumber",
+            "modifiedEndLineNumber",
+          ].map((key) => [key, Number(c[key])]),
+        ) as unknown as LineChange;
+        await this.writeWorkingFile(
+          service.git.root,
+          file,
+          snapshot.current,
+          revertChange(snapshot.current, snapshot.original, change),
+        );
+        return;
+      }
+      case "run":
+        return this.startRun(this.root, str("name"));
+      case "stopRun":
+        this.executions.get(`${this.root}\0${str("name")}`)?.terminate();
+        return;
+      case "selectRun":
+        await this.context.workspaceState.update(
+          `selectedRun:${this.root}`,
+          str("name"),
+        );
+        return this.updateRuns();
       case "layout": {
         const layout = str("layout");
         if (!["sideBySide", "unified"].includes(layout))
@@ -639,6 +720,201 @@ class Workbench {
       default:
         throw new Error("Unknown request");
     }
+  }
+  /** Replace the working copy (the open buffer when there is one) with `text`, as an undoable edit. */
+  private async writeWorkingFile(
+    root: string,
+    file: string,
+    expected: string,
+    text: string,
+  ) {
+    const target = path.resolve(root, file);
+    if (!inside(root, target)) throw new Error("Invalid path");
+    const uri = vscode.Uri.file(target);
+    const stat = await fs.lstat(target).catch(() => undefined);
+    if (stat?.isSymbolicLink())
+      throw new Error("Roll back symbolic links with Git.");
+    if (!stat) {
+      // A deleted file: rolling back recreates it.
+      if (expected !== "") throw new Error("File changed; refresh the view");
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(text));
+      return;
+    }
+    const document = await vscode.workspace.openTextDocument(uri);
+    const old = document.getText();
+    if (old !== expected.replace(/^\uFEFF/, ""))
+      throw new Error("File changed; refresh the view");
+    // Edit only the differing middle so cursors and folding elsewhere stay put.
+    let start = 0;
+    while (start < old.length && old[start] === text[start]) start++;
+    let end = 0;
+    while (
+      end < old.length - start &&
+      end < text.length - start &&
+      old[old.length - 1 - end] === text[text.length - 1 - end]
+    )
+      end++;
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(
+      uri,
+      new vscode.Range(
+        document.positionAt(start),
+        document.positionAt(old.length - end),
+      ),
+      text.slice(start, text.length - end),
+    );
+    const dirty = document.isDirty;
+    if (!(await vscode.workspace.applyEdit(edit)))
+      throw new Error("Could not roll back the change");
+    if (!dirty) await document.save();
+  }
+  private async runInfos(root: string): Promise<RunInfo[]> {
+    return (await loadRuns(root)).map((r) => ({
+      name: r.name,
+      type: r.type,
+      detail: r.compound
+        ? `Compound: ${r.compound.join(", ")}`
+        : (r.command ?? r.reason ?? ""),
+      runnable: Boolean(r.command || r.compound?.length),
+      running: this.executions.has(`${root}\0${r.name}`),
+    }));
+  }
+  private selectedRun(root: string, runs: RunInfo[]) {
+    const saved = this.context.workspaceState.get<string>(
+      `selectedRun:${root}`,
+    );
+    return (
+      runs.find((r) => r.name === saved) ??
+      runs.find((r) => r.runnable) ??
+      runs[0]
+    )?.name;
+  }
+  /** Refresh the status bar run button and the panel's run widget. */
+  private async updateRuns() {
+    try {
+      await this.ensureRoot();
+      const root = this.root;
+      const runs = await this.runInfos(root);
+      const selected = runs.find(
+        (r) => r.name === this.selectedRun(root, runs),
+      );
+      void vscode.commands.executeCommand(
+        "setContext",
+        "changesWorkbench.hasRuns",
+        runs.length > 0,
+      );
+      if (selected) {
+        this.runStatus.text = `$(${selected.running ? "debug-restart" : "play"}) ${selected.name}`;
+        this.runStatus.tooltip = `${selected.running ? "Rerun" : "Run"} '${selected.name}'\n${selected.detail}`;
+        this.runStatus.show();
+      } else this.runStatus.hide();
+      this.send("runs", { root, runs, selectedRun: selected?.name });
+    } catch {
+      this.runStatus.hide();
+    }
+  }
+  private async runSelected() {
+    try {
+      await this.ensureRoot();
+      const runs = await this.runInfos(this.root);
+      const name = this.selectedRun(this.root, runs);
+      if (name) await this.startRun(this.root, name);
+      else
+        vscode.window.showInformationMessage(
+          "No run configurations in .run/ or .idea/runConfigurations/.",
+        );
+    } catch (e) {
+      vscode.window.showErrorMessage(
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+  private async pickRun() {
+    try {
+      await this.ensureRoot();
+      const root = this.root;
+      const runs = await this.runInfos(root);
+      const picked = await vscode.window.showQuickPick(
+        runs.map((r) => ({
+          label: `$(${r.running ? "debug-restart" : r.runnable ? "play" : "circle-slash"}) ${r.name}`,
+          description: r.type,
+          detail: r.detail,
+          name: r.name,
+        })),
+        {
+          title: "Run configuration",
+          placeHolder: runs.length
+            ? "Choose a configuration to run"
+            : "No run configurations in .run/ or .idea/runConfigurations/",
+        },
+      );
+      if (!picked) return;
+      await this.context.workspaceState.update(
+        `selectedRun:${root}`,
+        picked.name,
+      );
+      await this.startRun(root, picked.name);
+    } catch (e) {
+      vscode.window.showErrorMessage(
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+  /** Launch a configuration (re-read from disk, never from the webview) in its own terminal. */
+  private async startRun(root: string, name: string, seen = new Set<string>()) {
+    const runs = await loadRuns(root);
+    const run = runs.find((r) => r.name === name);
+    if (!run) throw new Error(`Run configuration '${name}' not found`);
+    await this.context.workspaceState.update(`selectedRun:${root}`, name);
+    if (seen.has(name)) return;
+    seen.add(name);
+    if (run.compound) {
+      for (const part of run.compound) await this.startRun(root, part, seen);
+      void this.updateRuns();
+      return;
+    }
+    if (!run.command) throw new Error(run.reason);
+    // Like IntelliJ's Rerun: stop the running instance first.
+    const key = `${root}\0${name}`;
+    const running = this.executions.get(key);
+    if (running) {
+      const ended = new Promise<void>((resolve) => {
+        const sub = vscode.tasks.onDidEndTask((e) => {
+          if (e.execution === running) {
+            sub.dispose();
+            resolve();
+          }
+        });
+        setTimeout(() => {
+          sub.dispose();
+          resolve();
+        }, 3000);
+      });
+      running.terminate();
+      await ended;
+    }
+    await vscode.tasks.executeTask(this.task(root, run));
+  }
+  private task(root: string, run: RunConfiguration) {
+    const task = new vscode.Task(
+      { type: "changesWorkbench", name: run.name, root },
+      vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root)) ??
+        vscode.TaskScope.Workspace,
+      run.name,
+      "Run",
+      new vscode.ShellExecution(run.command!, {
+        cwd: run.cwd,
+        env: run.env,
+      }),
+    );
+    task.presentationOptions = {
+      reveal: vscode.TaskRevealKind.Always,
+      panel: vscode.TaskPanelKind.Dedicated,
+      clear: true,
+      focus: false,
+      showReuseMessage: false,
+    };
+    return task;
   }
   private async configureDeep() {
     const config = vscode.workspace.getConfiguration("changesWorkbench");

@@ -68,8 +68,19 @@ export interface RepoState {
   head: string;
   changes: Change[];
 }
+/** A shared IntelliJ run configuration, as the panel shows it. */
+export interface RunInfo {
+  name: string;
+  type: string;
+  /** The command line that runs, or why it cannot run outside IntelliJ. */
+  detail: string;
+  runnable: boolean;
+  running: boolean;
+}
 export interface ViewState {
   intellijKeymap: boolean;
+  runs: RunInfo[];
+  selectedRun?: string;
   repos: { root: string; name: string }[];
   repo: RepoState;
   scope: Scope;
@@ -91,7 +102,11 @@ export type RequestMethod =
   | "deep"
   | "chooseTheme"
   | "configureDeep"
-  | "layout";
+  | "layout"
+  | "rollback"
+  | "run"
+  | "stopRun"
+  | "selectRun";
 export interface RequestMessage {
   type: "request";
   id: number;
@@ -112,7 +127,7 @@ export interface ResponseMessage {
 }
 export interface EventMessage {
   type: "event";
-  event: "state" | "command" | "refresh" | "status";
+  event: "state" | "command" | "refresh" | "status" | "runs";
   data: unknown;
 }
 /** A definition location for display: relative to the repository when it lies inside it. */
@@ -143,3 +158,43 @@ export const languageOf = (path: string) =>
           : /\.[cm]?[jt]sx?$/.test(path)
             ? "typescript"
             : "plaintext";
+/** One diff hunk in Monaco's line-change form: an end line of 0 marks a pure insertion or deletion. */
+export interface LineChange {
+  originalStartLineNumber: number;
+  originalEndLineNumber: number;
+  modifiedStartLineNumber: number;
+  modifiedEndLineNumber: number;
+}
+/** The current text with one hunk rolled back to the original, as IntelliJ's gutter Rollback does. */
+export function revertChange(
+  current: string,
+  original: string,
+  change: LineChange,
+) {
+  const eol = current.includes("\r\n") ? "\r\n" : "\n";
+  const lines = current.split(/\r?\n/);
+  const base = original.split(/\r?\n/);
+  const {
+    originalStartLineNumber: oStart,
+    originalEndLineNumber: oEnd,
+    modifiedStartLineNumber: mStart,
+    modifiedEndLineNumber: mEnd,
+  } = change;
+  const valid = (n: number) => Number.isInteger(n) && n >= 0;
+  if (
+    ![oStart, oEnd, mStart, mEnd].every(valid) ||
+    (oEnd && (oStart < 1 || oEnd < oStart || oEnd > base.length)) ||
+    (mEnd && (mStart < 1 || mEnd < mStart || mEnd > lines.length)) ||
+    (!mEnd && mStart > lines.length) ||
+    (!oEnd && !mEnd)
+  )
+    throw new Error("This change no longer matches the file; refresh the view");
+  const restored = oEnd ? base.slice(oStart - 1, oEnd) : [];
+  // A deletion (mEnd 0) re-inserts the lines after mStart; otherwise the hunk is replaced.
+  lines.splice(
+    mEnd ? mStart - 1 : mStart,
+    mEnd ? mEnd - mStart + 1 : 0,
+    ...restored,
+  );
+  return lines.join(eol);
+}

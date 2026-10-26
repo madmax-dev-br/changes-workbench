@@ -16,7 +16,7 @@ import "monaco-editor/esm/vs/editor/contrib/hover/browser/hoverContribution";
 import "monaco-editor/esm/vs/basic-languages/java/java.contribution";
 import "monaco-editor/esm/vs/basic-languages/xml/xml.contribution";
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution";
-import type { Snapshot, BlameLine, Navigation } from "../shared";
+import type { Snapshot, BlameLine, Navigation, LineChange } from "../shared";
 import { displayPath } from "../shared";
 import { request, vscode } from "./rpc";
 import palettes from "../palettes.json";
@@ -95,7 +95,6 @@ interface Props {
   showBlame: boolean;
   onPosition: (line: number, column: number) => void;
   onDefinitions: (nav: Navigation) => void;
-  onOriginal: (text: string, line: number) => void;
   onError: (message: string) => void;
   onToggleBlame: (show: boolean) => void;
   viewStates: Map<string, monaco.editor.IDiffEditorViewState>;
@@ -113,6 +112,11 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
   const [menu, setMenu] = useState<
     { x: number; y: number; gutter: boolean } | undefined
   >();
+  // IntelliJ's change popup: the original text of one hunk, with Rollback.
+  const [hunk, setHunk] = useState<
+    { change: LineChange; x: number; y: number } | undefined
+  >();
+  const popup = useRef<HTMLDivElement>(null);
   const currentKey = useRef("");
   const navigationRequest = useRef<AbortController | undefined>(undefined);
   const markers = useRef<
@@ -148,6 +152,51 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
       if (!controller.signal.aborted) p.onError(String(e));
     }
   };
+  const changeAt = (line: number) =>
+    diff.current
+      ?.getLineChanges()
+      ?.find(
+        (c) =>
+          line >= Math.max(1, c.modifiedStartLineNumber) &&
+          line <=
+            Math.max(1, c.modifiedEndLineNumber || c.modifiedStartLineNumber),
+      );
+  const openHunk = (change: LineChange) => {
+    const modified = diff.current?.getModifiedEditor();
+    if (!modified) return;
+    const line = Math.max(
+      1,
+      change.modifiedEndLineNumber || change.modifiedStartLineNumber,
+    );
+    modified.revealLineInCenterIfOutsideViewport(line);
+    const at = modified.getScrolledVisiblePosition({
+      lineNumber: line,
+      column: 1,
+    });
+    const box = modified.getDomNode()?.getBoundingClientRect();
+    if (!at || !box) return;
+    setMenu(undefined);
+    setHunk({ change, x: box.left + 4, y: box.top + at.top + at.height });
+  };
+  const rollback = async (change: LineChange) => {
+    const p = latest.current;
+    setHunk(undefined);
+    try {
+      await request(
+        "rollback",
+        { path: p.snapshot.path, change },
+        p.snapshot.version,
+      );
+    } catch (e) {
+      p.onError(String(e));
+    }
+  };
+  const rollbackBlocked = () =>
+    latest.current.snapshot.scope === "staged"
+      ? "Rollback works on working tree changes"
+      : latest.current.snapshot.conflicted
+        ? "Resolve the conflict in the editor first"
+        : "";
   useImperativeHandle(ref, () => ({
     next: (direction) => {
       const d = diff.current;
@@ -326,6 +375,19 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
       }),
     );
     disposables.push(
+      modified.onDidScrollChange(() => setHunk(undefined)),
+      // IntelliJ's Rollback Lines (Ctrl+Alt+Z / ⌘⌥Z) for the change under the cursor.
+      modified.addAction({
+        id: "changes.rollbackLines",
+        label: "Rollback Lines",
+        keybindings: [
+          monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyZ,
+        ],
+        run: () => {
+          const c = changeAt(modified.getPosition()?.lineNumber ?? 0);
+          if (c && !rollbackBlocked()) void rollback(c);
+        },
+      }),
       modified.addAction({
         id: "changes.previewDefinition",
         label: "Preview Definition",
@@ -392,11 +454,7 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
               className:
                 !removed && !added ? "cw-modified-background" : undefined,
               hoverMessage: {
-                value: removed
-                  ? "Deleted lines · click the gutter marker"
-                  : added
-                    ? "Added lines"
-                    : "Modified lines · click the blue marker",
+                value: `${removed ? "Deleted" : added ? "Added" : "Modified"} lines · click the marker to see the original or roll back`,
               },
             },
           });
@@ -419,36 +477,85 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
             monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN,
           ].includes(e.target.type)
         ) {
-          const c = editor
-            .getLineChanges()
-            ?.find(
-              (c) =>
-                pos.lineNumber >= Math.max(1, c.modifiedStartLineNumber) &&
-                pos.lineNumber <=
-                  Math.max(
-                    1,
-                    c.modifiedEndLineNumber || c.modifiedStartLineNumber,
-                  ),
-            );
-          const original = editor.getOriginalEditor().getModel();
-          if (c && original) {
-            const text =
-              c.originalEndLineNumber === 0
-                ? "New lines — nothing existed here in the base."
-                : original.getValueInRange(
-                    new monaco.Range(
-                      Math.max(1, c.originalStartLineNumber),
-                      1,
-                      c.originalEndLineNumber,
-                      original.getLineMaxColumn(c.originalEndLineNumber),
-                    ),
-                  );
-            latest.current.onOriginal(text, c.originalStartLineNumber);
-          }
+          const c = changeAt(pos.lineNumber);
+          if (c) openHunk(c);
         }
       }),
     );
+    // IntelliJ link highlight: holding ⌘ (Ctrl elsewhere) underlines a navigable symbol.
+    const link = modified.createDecorationsCollection();
+    const mac = /Mac/i.test(navigator.platform);
+    let pointer: monaco.editor.IMouseTarget | undefined;
+    let linkKey = "";
+    let linkRequest: AbortController | undefined;
+    const clearLink = () => {
+      linkKey = "";
+      linkRequest?.abort();
+      link.clear();
+    };
+    const showLink = async (held: boolean) => {
+      const model = modified.getModel();
+      const position =
+        pointer?.type === monaco.editor.MouseTargetType.CONTENT_TEXT
+          ? pointer.position
+          : undefined;
+      const word = position && model?.getWordAtPosition(position);
+      if (!held || !position || !word || !/^[A-Za-z_$]/.test(word.word))
+        return clearLink();
+      const p = latest.current;
+      const key = `${p.snapshot.version}:${position.lineNumber}:${word.startColumn}`;
+      if (key === linkKey) return;
+      clearLink();
+      linkKey = key;
+      const controller = new AbortController();
+      linkRequest = controller;
+      try {
+        const nav = await request<Navigation>(
+          "navigate",
+          {
+            path: p.snapshot.path,
+            line: position.lineNumber - 1,
+            column: word.startColumn - 1,
+          },
+          p.snapshot.version,
+          controller.signal,
+        );
+        if (linkKey === key && nav.candidates.length)
+          link.set([
+            {
+              range: new monaco.Range(
+                position.lineNumber,
+                word.startColumn,
+                position.lineNumber,
+                word.endColumn,
+              ),
+              options: { inlineClassName: "cw-link" },
+            },
+          ]);
+      } catch {}
+    };
+    const held = (e: { metaKey: boolean; ctrlKey: boolean }) =>
+      mac ? e.metaKey : e.ctrlKey;
+    const linkKeys = (e: KeyboardEvent) => void showLink(held(e));
+    window.addEventListener("keydown", linkKeys);
+    window.addEventListener("keyup", linkKeys);
+    window.addEventListener("blur", clearLink);
+    disposables.push(
+      modified.onMouseMove((e) => {
+        pointer = e.target;
+        void showLink(held(e.event));
+      }),
+      modified.onMouseLeave(() => {
+        pointer = undefined;
+        clearLink();
+      }),
+      modified.onDidChangeModel(clearLink),
+    );
     return () => {
+      window.removeEventListener("keydown", linkKeys);
+      window.removeEventListener("keyup", linkKeys);
+      window.removeEventListener("blur", clearLink);
+      linkRequest?.abort();
       navigationRequest.current?.abort();
       clearTimeout(persistTimer);
       persistView();
@@ -489,6 +596,7 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
         `changes-live:/${encodeURIComponent(snapshot.path)}?${snapshot.version}`,
       ),
     );
+    setHunk(undefined);
     editor.setModel({ original, modified: current });
     old?.original.dispose();
     old?.modified.dispose();
@@ -551,6 +659,117 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
         })),
     );
   }, [props.blame, props.showBlame, props.snapshot.version]);
+  useEffect(() => {
+    if (!hunk) return;
+    const close = (e: Event) => {
+      if (!popup.current?.contains(e.target as Node)) setHunk(undefined);
+    };
+    const key = (e: KeyboardEvent) => e.key === "Escape" && setHunk(undefined);
+    // Capture: a click on another marker closes this popup before opening its own.
+    window.addEventListener("mousedown", close, true);
+    window.addEventListener("blur", close);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("mousedown", close, true);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("keydown", key);
+    };
+  }, [hunk]);
+  const hunkView = () => {
+    if (!hunk) return;
+    const { change } = hunk;
+    const original = diff.current?.getOriginalEditor().getModel();
+    const text =
+      change.originalEndLineNumber && original
+        ? original.getValueInRange(
+            new monaco.Range(
+              change.originalStartLineNumber,
+              1,
+              change.originalEndLineNumber,
+              original.getLineMaxColumn(change.originalEndLineNumber),
+            ),
+          )
+        : "";
+    const changes = diff.current?.getLineChanges() ?? [];
+    const index = changes.findIndex(
+      (c) =>
+        c.modifiedStartLineNumber === change.modifiedStartLineNumber &&
+        c.originalStartLineNumber === change.originalStartLineNumber,
+    );
+    const step = (direction: number) => {
+      const next =
+        changes[(index + direction + changes.length) % changes.length];
+      if (next) openHunk(next);
+    };
+    const blocked = rollbackBlocked();
+    const tool = (
+      label: string,
+      icon: string,
+      run: () => void,
+      disabled = false,
+      title = label,
+    ) => (
+      <button
+        aria-label={label}
+        title={title}
+        disabled={disabled}
+        onClick={run}
+      >
+        <span className={`codicon codicon-${icon}`} />
+      </button>
+    );
+    return (
+      <div
+        ref={popup}
+        className="cw-hunk"
+        role="dialog"
+        aria-label="Change"
+        style={{
+          left: Math.max(8, Math.min(hunk.x, window.innerWidth - 480)),
+          top: Math.max(8, Math.min(hunk.y, window.innerHeight - 140)),
+        }}
+      >
+        <div className="cw-hunk-toolbar">
+          {tool(
+            "Previous change",
+            "arrow-up",
+            () => step(-1),
+            changes.length < 2,
+          )}
+          {tool("Next change", "arrow-down", () => step(1), changes.length < 2)}
+          {tool(
+            "Rollback",
+            "discard",
+            () => void rollback(change),
+            Boolean(blocked),
+            blocked || "Rollback (⌘⌥Z / Ctrl+Alt+Z)",
+          )}
+          {tool(
+            "Copy original",
+            "copy",
+            () => void navigator.clipboard?.writeText(text),
+            !text,
+          )}
+          <span className="cw-hunk-title">
+            {!change.originalEndLineNumber
+              ? "Added lines"
+              : !change.modifiedEndLineNumber
+                ? "Deleted lines"
+                : "Modified lines"}
+            {index >= 0 && changes.length > 1
+              ? ` · ${index + 1} of ${changes.length}`
+              : ""}
+          </span>
+          {tool("Close", "close", () => setHunk(undefined))}
+        </div>
+        {text ? (
+          <pre>{text}</pre>
+        ) : (
+          <p>Nothing existed here in the base; Rollback removes these lines.</p>
+        )}
+      </div>
+    );
+  };
   const item = (label: string, run: () => void) => (
     <button
       role="menuitem"
@@ -576,9 +795,24 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
           {props.showBlame
             ? item("Close Annotations", () => props.onToggleBlame(false))
             : item("Annotate with Git Blame", () => props.onToggleBlame(true))}
+          {(() => {
+            const c = changeAt(
+              diff.current?.getModifiedEditor().getPosition()?.lineNumber ?? 0,
+            );
+            return (
+              c &&
+              !rollbackBlocked() && (
+                <>
+                  {item("Show Original…", () => openHunk(c))}
+                  {item("Rollback Lines", () => void rollback(c))}
+                </>
+              )
+            );
+          })()}
           {!menu.gutter && item("Preview Definition", () => void navigate())}
         </div>
       )}
+      {hunkView()}
     </>
   );
 });

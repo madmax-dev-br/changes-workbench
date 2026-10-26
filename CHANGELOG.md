@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- Rollback from the gutter, as in IntelliJ: click a blue, green or grey-arrow change marker for the original lines, previous/next change, copy and **Rollback**. Also `⌘⌥Z` / `Ctrl+Alt+Z` and **Rollback Lines** in the right-click menu.
+- Run IntelliJ run configurations from `.run/` and `.idea/runConfigurations/`: a run widget with ▶ Run / Rerun and ■ Stop in the workbench, a status bar button, and `Ctrl+R` / `Shift+F10` (`Ctrl+⌥R` / `Alt+Shift+F10` to choose). Supports Gradle, Maven, Shell Script, npm, Python and Compound configurations.
+- Hold `⌘` / `Ctrl` over a function or class in the diff to underline it as a link when it has a definition.
+
 ## 0.1.0
 
 First public release.

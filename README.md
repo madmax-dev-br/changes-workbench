@@ -1,15 +1,17 @@
 # Changes Workbench
 
-An IntelliJ-style review workspace for VS Code and Cursor: a change tree, one reusable diff, Git blame in the gutter, and Kotlin/Java navigation that works right away and gets precise once a language server has indexed the project.
+An IntelliJ-style review workspace for VS Code and Cursor: a change tree, one reusable diff with gutter Rollback, Git blame in the gutter, IntelliJ run configurations, and Kotlin/Java navigation that works right away and gets precise once a language server has indexed the project.
 
-The workbench is read-only. It reviews files without staging, committing, discarding or saving them; use **Open in editor** (`F4`) to edit.
+The workbench never stages or commits. The only edit it makes is a **Rollback** you ask for from the gutter; use **Open in editor** (`F4`) for anything else.
 
 ## Features
 
 - **Change tree with scopes.** All changes compares `HEAD` to the current editor buffer, including unsaved edits. Staged compares `HEAD` to the index; Unstaged compares the index to the buffer. Filter the tree by name or status, and mark files as reviewed. A review mark clears itself when the file or its base changes.
 - **One diff, IntelliJ keys.** Side-by-side or unified. `F7` / `Shift+F7` move between changes, `Alt+Left` / `Alt+Right` switch files.
+- **Rollback from the gutter.** Click a blue (modified), green (added) or grey-arrow (deleted) marker to see the original lines, step to the previous or next change, copy the original, or **Rollback** just that change, as in IntelliJ. `⌘⌥Z` / `Ctrl+Alt+Z` rolls back the change under the cursor, and the right-click menu has **Rollback Lines**. The edit goes into the working file (or its unsaved buffer) and can be undone with `⌘Z` / `Ctrl+Z` in the editor. Staged changes and merge conflicts are not rolled back from here.
+- **Run configurations.** Shared IntelliJ run configurations in `.run/*.run.xml` and `.idea/runConfigurations/*.xml` appear in the workbench's run widget and in the status bar. Press ▶ to run the selected one in its own terminal, ■ to stop it, or ▶ again to rerun. Gradle (using `gradlew` when present), Maven (`mvnw`), Shell Script, npm/yarn/pnpm, Python and Compound configurations run directly with their working directory and environment. Application, Kotlin, Spring Boot and other configurations that need IntelliJ's build classpath are listed but disabled.
 - **Git blame in the gutter.** Right-click the line numbers and choose **Annotate with Git Blame**: the date and author appear beside each line. Hover an annotation for the commit message, click it to open that commit's diff, and choose **Close Annotations** to hide them again.
-- **Hover and go to definition.** Hover a symbol for its signature, documentation and the line's blame. `⌘B` / `Ctrl+B` shows a definition preview; open it in the editor from there.
+- **Hover and go to definition.** Hover a symbol for its signature, documentation and the line's blame. Hold `⌘` (`Ctrl` on Windows and Linux) to underline functions and classes that have a definition, then click to preview it. `⌘B` / `Ctrl+B` shows a definition preview; open it in the editor from there.
 - **Lightweight navigation, no setup.** Kotlin and Java files are parsed on demand with Tree-sitter, using scopes, packages and imports. It needs no Java runtime and no project import. Ambiguous member calls show candidates instead of guessing.
 - **Optional deep analysis.** Turn on **On demand** to use Kotlin LSP and/or Eclipse JDT LS for exact resolution, including the Kotlin standard library. See below.
 - **IntelliJ keymap and themes.** IntelliJ shortcuts for review, navigation, search and editing are on by default. **Changes: Choose IntelliJ Theme** applies a Dark, Darcula or Light color scheme to the whole editor.
@@ -44,6 +46,9 @@ When the repository has no Gradle or Maven build at its root, the extension desc
 | Go to definition | `⌘B` | `Ctrl+B` |
 | Quick documentation | `F1` | `Ctrl+Q` |
 | Open in editor | `F4` | `F4` |
+| Rollback lines | `⌘⌥Z` | `Ctrl+Alt+Z` |
+| Run selected configuration | `Ctrl+R` | `Shift+F10` |
+| Choose and run a configuration | `Ctrl+⌥R` | `Alt+Shift+F10` |
 
 The full mapping, including editing and search shortcuts in regular editors, is in `docs/appearance.md`. Set `changesWorkbench.intellijKeymap` to `false` if you use another keymap extension.
 

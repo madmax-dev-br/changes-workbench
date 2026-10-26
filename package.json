@@ -1,8 +1,8 @@
 {
   "name": "changes-workbench",
   "displayName": "Changes Workbench",
-  "description": "IntelliJ-style change review for VS Code and Cursor: change tree, diff, Git blame in the gutter, and Kotlin/Java navigation with optional language-server indexing.",
-  "version": "0.1.0",
+  "description": "IntelliJ-style change review for VS Code and Cursor: change tree, diff with gutter Rollback, Git blame in the gutter, IntelliJ run configurations, and Kotlin/Java navigation with optional language-server indexing.",
+  "version": "0.2.0",
   "publisher": "madmax-dev-br",
   "license": "MIT",
   "repository": {
@@ -29,7 +29,8 @@
     "kotlin",
     "java",
     "keymap",
-    "darcula"
+    "darcula",
+    "run configurations"
   ],
   "engines": {
     "vscode": "^1.96.0"
@@ -115,6 +116,15 @@
       {
         "command": "changesWorkbench.quickDocumentation",
         "title": "Changes: Quick Documentation"
+      },
+      {
+        "command": "changesWorkbench.run",
+        "title": "Changes: Run Configuration",
+        "icon": "$(play)"
+      },
+      {
+        "command": "changesWorkbench.selectRun",
+        "title": "Changes: Select and Run Configuration…"
       }
     ],
     "menus": {
@@ -434,6 +444,18 @@
         "when": "config.changesWorkbench.intellijKeymap && !terminalFocus"
       },
       {
+        "command": "changesWorkbench.run",
+        "key": "shift+f10",
+        "mac": "ctrl+r",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.hasRuns && !terminalFocus"
+      },
+      {
+        "command": "changesWorkbench.selectRun",
+        "key": "alt+shift+f10",
+        "mac": "ctrl+alt+r",
+        "when": "config.changesWorkbench.intellijKeymap && changesWorkbench.hasRuns && !terminalFocus"
+      },
+      {
         "command": "changesWorkbench.nextFile",
         "key": "alt+right",
         "mac": "alt+right",
@@ -544,6 +566,25 @@
         "label": "Changes: IntelliJ Light",
         "uiTheme": "vs",
         "path": "./themes/light.json"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "changesWorkbench",
+        "required": [
+          "name",
+          "root"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "IntelliJ run configuration name."
+          },
+          "root": {
+            "type": "string",
+            "description": "Repository root that holds the configuration."
+          }
+        }
       }
     ]
   },

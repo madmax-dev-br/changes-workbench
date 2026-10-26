@@ -12,6 +12,7 @@ import type {
   Scope,
   BlameLine,
   Navigation,
+  RunInfo,
 } from "../shared";
 import { displayPath } from "../shared";
 import { Diff, type DiffHandle } from "./Diff";
@@ -42,7 +43,10 @@ type IconName =
   | "bolt"
   | "split"
   | "external"
-  | "chevron";
+  | "chevron"
+  | "play"
+  | "stop"
+  | "rerun";
 const shapes: Record<IconName, React.ReactNode> = {
   branch: (
     <>
@@ -99,6 +103,16 @@ const shapes: Record<IconName, React.ReactNode> = {
     </>
   ),
   chevron: <path d="m6 9 6 6 6-6" />,
+  play: <path d="M7 4.5v15l12-7.5z" fill="currentColor" />,
+  stop: (
+    <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" />
+  ),
+  rerun: (
+    <>
+      <path d="M19 12a7 7 0 1 1-2.1-5" />
+      <path d="M17.5 2.5v4.5H13" />
+    </>
+  ),
 };
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
   return (
@@ -172,7 +186,6 @@ export default function App() {
   );
   const [position, setPosition] = useState({ line: 0, column: 0 });
   const [navigation, setNavigation] = useState<Navigation>();
-  const [original, setOriginal] = useState<{ text: string; line: number }>();
   const [sidebar, setSidebar] = useState(persisted.current.sidebar ?? 290);
   const [theme, setTheme] = useState(detectTheme());
   const diff = useRef<DiffHandle>(null);
@@ -254,6 +267,15 @@ export default function App() {
         }
       }
       if (m.event === "refresh") void perform("refresh");
+      if (m.event === "runs") {
+        const { root, runs, selectedRun } = m.data as Pick<
+          ViewState,
+          "runs" | "selectedRun"
+        > & { root: string };
+        setState((s) =>
+          s && s.repo.root === root ? { ...s, runs, selectedRun } : s,
+        );
+      }
       if (m.event === "status") {
         const { root, deepStatus, mode } = m.data as Pick<
           ViewState,
@@ -332,7 +354,6 @@ export default function App() {
     )
       setSnapshot(undefined);
     setNavigation(undefined);
-    setOriginal(undefined);
     setError("");
     request<Snapshot>(
       "snapshot",
@@ -410,7 +431,6 @@ export default function App() {
         diff.current?.definitions();
       } else if (e.key === "Escape") {
         setNavigation(undefined);
-        setOriginal(undefined);
         diff.current?.focus();
       }
     };
@@ -487,6 +507,11 @@ export default function App() {
           </span>
         </div>
         <div className="top-actions">
+          <RunWidget
+            runs={state?.runs ?? []}
+            selected={state?.selectedRun}
+            perform={perform}
+          />
           <button
             className={`mode ${state?.mode === "deep" ? "deep" : ""}`}
             onClick={() =>
@@ -732,7 +757,6 @@ export default function App() {
                 showBlame={showBlame}
                 onPosition={(line, column) => setPosition({ line, column })}
                 onDefinitions={setNavigation}
-                onOriginal={(text, line) => setOriginal({ text, line })}
                 onError={report}
                 onToggleBlame={setShowBlame}
                 viewStates={viewStates.current}
@@ -814,19 +838,6 @@ export default function App() {
                     ))}
               </div>
             )}
-            {original && (
-              <div className="original-preview">
-                <div className="peek-heading">
-                  <span>Original · line {original.line}</span>
-                  <Action
-                    label="Close original preview"
-                    icon="close"
-                    onClick={() => setOriginal(undefined)}
-                  />
-                </div>
-                <pre>{original.text}</pre>
-              </div>
-            )}
           </div>
           <div className="blame-bar">
             <Icon name="history" size={14} />
@@ -872,10 +883,66 @@ export default function App() {
             Configure analysis
           </button>
           <span className="footer-hint">⌘/Ctrl+B · definition</span>
-          <span className="read-only">READ ONLY</span>
         </div>
       </footer>
     </main>
+  );
+}
+/** IntelliJ's run widget: configuration selector, Run (or Rerun) and Stop. */
+function RunWidget({
+  runs,
+  selected,
+  perform,
+}: {
+  runs: RunInfo[];
+  selected?: string;
+  perform: (
+    method: Parameters<typeof request>[0],
+    params?: Record<string, unknown>,
+  ) => Promise<unknown>;
+}) {
+  if (!runs.length) return null;
+  const run = runs.find((r) => r.name === selected) ?? runs[0];
+  return (
+    <div className="run-widget">
+      <select
+        aria-label="Run configuration"
+        title={run.detail}
+        value={run.name}
+        onChange={(e) => void perform("selectRun", { name: e.target.value })}
+      >
+        {runs.map((r) => (
+          <option key={r.name} value={r.name}>
+            {r.running ? "● " : ""}
+            {r.name}
+            {r.runnable ? "" : " (IntelliJ only)"}
+          </option>
+        ))}
+      </select>
+      <button
+        className="run-button"
+        aria-label={`${run.running ? "Rerun" : "Run"} '${run.name}'`}
+        title={
+          run.runnable
+            ? `${run.running ? "Rerun" : "Run"} '${run.name}'\n${run.detail}`
+            : run.detail
+        }
+        disabled={!run.runnable}
+        onClick={() => void perform("run", { name: run.name })}
+      >
+        <Icon name={run.running ? "rerun" : "play"} size={15} />
+      </button>
+      {run.running && (
+        <button
+          className="stop-button"
+          aria-label={`Stop '${run.name}'`}
+          title={`Stop '${run.name}'`}
+          onClick={() => void perform("stopRun", { name: run.name })}
+        >
+          <Icon name="stop" size={13} />
+        </button>
+      )}
+    </div>
   );
 }
 interface TreeRow {

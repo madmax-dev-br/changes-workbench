@@ -530,10 +530,12 @@ kbd {
 .cw-modified {
   border-left: 3px solid var(--modified);
   margin-left: 3px;
+  cursor: pointer;
 }
 .cw-added {
   border-left: 3px solid var(--added);
   margin-left: 3px;
+  cursor: pointer;
 }
 .cw-deleted {
   border-left: 7px solid var(--deleted);
@@ -615,11 +617,6 @@ footer > div {
 footer button {
   color: var(--muted);
   font-size: 9px;
-}
-.read-only {
-  font-size: 8px;
-  letter-spacing: 1px;
-  color: var(--dim);
 }
 .empty {
   height: 100%;
@@ -714,8 +711,7 @@ footer button {
   padding: 12px;
   border-bottom: 1px solid var(--border);
 }
-.peek pre,
-.original-preview pre {
+.peek pre {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 11px;
   line-height: 1.7;
@@ -748,22 +744,6 @@ footer button {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
-}
-.original-preview {
-  position: absolute;
-  left: 20px;
-  right: 20px;
-  bottom: 20px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  box-shadow: 0 6px 20px #0005;
-  border-radius: 5px;
-  z-index: 7;
-  max-height: 45%;
-  overflow: auto;
-}
-.original-preview pre {
-  padding: 0 14px 14px;
 }
 .dirty-badge {
   font-size: 9px;
@@ -904,9 +884,6 @@ footer button {
   footer > div {
     gap: 4px;
   }
-  .read-only {
-    display: none;
-  }
   .comparison-label {
     font-size: 8px;
   }
@@ -950,4 +927,103 @@ footer button {
 .cw-menu button:hover,
 .cw-menu button:focus-visible {
   background: var(--selection);
+}
+.run-widget {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.run-widget select {
+  max-width: 200px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+.run-button,
+.stop-button {
+  width: 28px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+.run-button {
+  color: var(--green);
+}
+.stop-button {
+  color: var(--red);
+}
+.run-button:hover:not(:disabled),
+.stop-button:hover {
+  background: var(--bar);
+}
+.cw-hunk {
+  position: fixed;
+  z-index: 1000;
+  width: min(560px, calc(100vw - 16px));
+  max-height: 45vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px #0006;
+  overflow: hidden;
+}
+.cw-hunk-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.cw-hunk-toolbar button {
+  width: 26px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text);
+}
+.cw-hunk-toolbar button:hover:not(:disabled) {
+  background: var(--bar);
+}
+.cw-hunk-title {
+  flex: 1;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cw-hunk pre {
+  margin: 0;
+  padding: 8px 12px;
+  overflow: auto;
+  background: var(--remove);
+  color: var(--text);
+  font:
+    12px/18px "SF Mono",
+    Menlo,
+    Consolas,
+    monospace;
+}
+.cw-hunk p {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.monaco-editor .cw-link {
+  color: var(--blue) !important;
+  text-decoration: underline;
+  cursor: pointer;
 }
