@@ -61,6 +61,38 @@ export interface Navigation {
   confidence: "local" | "import" | "candidate" | "deep" | "none";
   note?: string;
 }
+/** A Search Everywhere or Find in Files result; lines and columns are 0-based. */
+export interface SearchHit {
+  kind: "class" | "file" | "symbol" | "action" | "text";
+  /** Class, file or symbol name, action title, or the matching line for text. */
+  name: string;
+  /** Folder, file and line, or action category. */
+  detail: string;
+  /** Repository-relative path. */
+  path?: string;
+  line: number;
+  column: number;
+  /** Declaration keyword such as `class`, `object` or `fun`. */
+  keyword?: string;
+  /** Text hits: matched ranges within `name`. */
+  ranges?: [number, number][];
+  /** Actions: the command to run. */
+  command?: string;
+}
+export type SearchTab =
+  "all" | "classes" | "files" | "symbols" | "actions" | "text";
+export interface TextQuery {
+  query: string;
+  matchCase: boolean;
+  words: boolean;
+  regex: boolean;
+  /** Comma-separated file masks such as `*.kt, *.java`. */
+  mask: string;
+}
+export interface SearchResult {
+  hits: SearchHit[];
+  truncated: boolean;
+}
 export interface RepoState {
   root: string;
   name: string;
@@ -112,7 +144,11 @@ export type RequestMethod =
   | "stopRun"
   | "selectRun"
   | "selectVariant"
-  | "reloadVariants";
+  | "reloadVariants"
+  | "searchEverywhere"
+  | "findInFiles"
+  | "searchPreview"
+  | "runAction";
 export interface RequestMessage {
   type: "request";
   id: number;

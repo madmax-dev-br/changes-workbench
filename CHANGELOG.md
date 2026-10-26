@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- Search Everywhere, as in IntelliJ: press `Shift` twice in the workbench to search classes, files, symbols (functions and methods), actions and text, with camel-hump matching and **All / Classes / Files / Symbols / Actions / Text** tabs.
+- Find in Files (`⌘⇧F` / `Ctrl+Shift+F`): text search across the repository with a live preview of each match, match case, whole words, regular expressions and a file mask.
+
 ## 0.4.0
 
 - Build variants for Android apps, as in Android Studio: selecting an Android app shows a combo box with the module's variants (product flavors × build types), read from Gradle and remembered per configuration. ▶ installs that variant and launches it with its own application ID, so projects with flavors no longer fail with "task 'installDebug' is ambiguous". Also **Changes: Select Build Variant…** in the Command Palette.

@@ -89,6 +89,8 @@ export interface DiffHandle {
   documentation: () => void;
   find: () => void;
   findNext: (direction: number) => void;
+  /** Selected text on one line, to start a search with. */
+  selection: () => string;
 }
 interface Props {
   snapshot: Snapshot;
@@ -310,6 +312,20 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
         ? "Resolve the conflict in the editor first"
         : "";
   useImperativeHandle(ref, () => ({
+    selection: () => {
+      const d = diff.current;
+      if (!d) return "";
+      for (const editor of [d.getModifiedEditor(), d.getOriginalEditor()]) {
+        const selection = editor.getSelection();
+        if (
+          selection &&
+          !selection.isEmpty() &&
+          selection.startLineNumber === selection.endLineNumber
+        )
+          return editor.getModel()?.getValueInRange(selection) ?? "";
+      }
+      return "";
+    },
     next: (direction) => {
       const d = diff.current;
       if (!d) return;

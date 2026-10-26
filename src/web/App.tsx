@@ -13,9 +13,11 @@ import type {
   BlameLine,
   Navigation,
   RunInfo,
+  SearchHit,
 } from "../shared";
 import { displayPath } from "../shared";
 import { Diff, type DiffHandle } from "./Diff";
+import { FindInFiles, SearchEverywhere } from "./Search";
 import { request, vscode } from "./rpc";
 import type { editor } from "monaco-editor";
 import palettes from "../palettes.json";
@@ -189,6 +191,35 @@ export default function App() {
   const [sidebar, setSidebar] = useState(persisted.current.sidebar ?? 290);
   const [theme, setTheme] = useState(detectTheme());
   const diff = useRef<DiffHandle>(null);
+  const [popup, setPopup] = useState<{
+    mode: "everywhere" | "find";
+    initial: string;
+  }>();
+  const openSearch = (mode: "everywhere" | "find") =>
+    setPopup((s) =>
+      s?.mode === mode ? s : { mode, initial: diff.current?.selection() ?? "" },
+    );
+  const closeSearch = () => {
+    setPopup(undefined);
+    diff.current?.focus();
+  };
+  // IntelliJ's Search Everywhere: press Shift twice.
+  useEffect(() => {
+    let last = -1000;
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Shift" || e.ctrlKey || e.metaKey || e.altKey) {
+        last = -1000;
+        return;
+      }
+      if (e.repeat) return;
+      if (e.timeStamp - last < 400) {
+        last = -1000;
+        openSearch("everywhere");
+      } else last = e.timeStamp;
+    };
+    document.addEventListener("keydown", key, true);
+    return () => document.removeEventListener("keydown", key, true);
+  }, []);
   const viewStates = useRef(
     new Map<string, editor.IDiffEditorViewState>(
       Object.entries(persisted.current.viewStates ?? {}),
@@ -314,6 +345,12 @@ export default function App() {
           case "toggleReviewed":
             mark();
             break;
+          case "searchEverywhere":
+            openSearch("everywhere");
+            break;
+          case "findInFiles":
+            openSearch("find");
+            break;
         }
       }
     };
@@ -403,8 +440,22 @@ export default function App() {
     const open = () => openFile();
     const key = (e: KeyboardEvent) => {
       const mod = /Mac/i.test(navigator.platform) ? e.metaKey : e.ctrlKey;
+      // The search popups handle their own keys.
+      if (document.querySelector(".cw-search")) return;
+      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        e.stopPropagation();
+        openSearch("find");
+        return;
+      }
       // Find bar: ⌘F / Ctrl+F, then F3 or ⌘G / Ctrl+G (with Shift for the previous match).
-      if (mod && !e.altKey && e.key.toLowerCase() === "f" && snapshot) {
+      if (
+        mod &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "f" &&
+        snapshot
+      ) {
         e.preventDefault();
         e.stopPropagation();
         diff.current?.find();
@@ -458,6 +509,17 @@ export default function App() {
       document.removeEventListener("keydown", key, true);
     };
   }, [snapshot, filtered, state?.intellijKeymap]);
+  const openHit = (hit: SearchHit) => {
+    setPopup(undefined);
+    if (hit.kind === "action")
+      void perform("runAction", { command: hit.command });
+    else if (hit.path)
+      void perform("openLocation", {
+        path: hit.path,
+        line: hit.line,
+        column: hit.column,
+      });
+  };
   const resize = (event: React.PointerEvent) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     const start = event.clientX,
@@ -902,6 +964,21 @@ export default function App() {
           <span className="footer-hint">⌘/Ctrl+B · definition</span>
         </div>
       </footer>
+      {popup?.mode === "everywhere" && (
+        <SearchEverywhere
+          initial={popup.initial}
+          onOpen={openHit}
+          onClose={closeSearch}
+        />
+      )}
+      {popup?.mode === "find" && (
+        <FindInFiles
+          initial={popup.initial}
+          theme={theme}
+          onOpen={openHit}
+          onClose={closeSearch}
+        />
+      )}
     </main>
   );
 }

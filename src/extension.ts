@@ -10,6 +10,16 @@ import { DeepManager } from "./host/deep";
 import { ReviewStore } from "./host/reviews";
 import { findExecutable } from "./host/dependencies";
 import {
+  listFiles,
+  rank,
+  ripgrep,
+  scanDeclarations,
+  searchDeclarations,
+  searchFiles,
+  searchText,
+  type Declaration,
+} from "./host/search";
+import {
   INIT_SCRIPT,
   defaultVariant,
   loadRuns,
@@ -28,6 +38,7 @@ import {
   type RequestMessage,
   type Navigation,
   type BlameLine,
+  type SearchHit,
 } from "./shared";
 interface Services {
   git: GitService;
@@ -53,6 +64,14 @@ class Workbench {
   private requests = new Map<number, AbortController>();
   private snapshots = new Map<string, Snapshot>();
   private allowedLocations = new Set<string>();
+  /** Search Everywhere indexes per root, rebuilt on the next search after files change. */
+  private searchIndex = new Map<
+    string,
+    { files?: Promise<string[]>; declarations?: Promise<Declaration[]> }
+  >();
+  private ripgrep = ripgrep(vscode.env.appRoot);
+  /** A popup to open once the webview has loaded. */
+  private pendingCommand?: string;
   private refreshTimer?: NodeJS.Timeout;
   private epoch = 0;
   private disposables: vscode.Disposable[] = [];
@@ -129,6 +148,12 @@ class Workbench {
     command("run", () => this.runSelected());
     command("selectRun", () => this.pickRun());
     command("selectVariant", () => this.pickVariant());
+    for (const name of ["searchEverywhere", "findInFiles"])
+      command(name, async () => {
+        if (this.panel?.visible) return this.send("command", name);
+        this.pendingCommand = name;
+        await this.open();
+      });
     this.runStatus.command = "changesWorkbench.run";
     // Run configurations launch as tasks, so the terminal panel shows and stops them.
     this.disposables.push(
@@ -409,6 +434,7 @@ class Workbench {
       void this.updateRuns();
     }
     this.epoch++;
+    this.searchIndex.clear();
     this.snapshots.clear();
     this.nativeBlameCache.clear();
     for (const s of this.services.values()) {
@@ -603,8 +629,90 @@ class Workbench {
     await this.ensureRoot();
     const service = this.current;
     switch (request.method) {
-      case "refresh":
-        return this.refresh();
+      case "refresh": {
+        const state = await this.refresh();
+        if (this.pendingCommand) this.send("command", this.pendingCommand);
+        this.pendingCommand = undefined;
+        return state;
+      }
+      case "searchEverywhere": {
+        const tab = str("tab");
+        const query = str("query").trim();
+        if (!query) return { hits: [], truncated: false };
+        const limit = tab === "all" ? 6 : 60;
+        const hits = [];
+        const index = this.searchIndex.get(this.root) ?? {};
+        this.searchIndex.set(this.root, index);
+        if (tab === "all" || tab === "classes" || tab === "symbols") {
+          const root = this.root;
+          index.declarations ??= scanDeclarations(this.ripgrep, root);
+          index.declarations.catch(() => {
+            if (this.searchIndex.get(root) === index)
+              index.declarations = undefined;
+          });
+          const declarations = await index.declarations;
+          if (tab !== "symbols")
+            hits.push(...searchDeclarations(declarations, query, true, limit));
+          if (tab !== "classes")
+            hits.push(
+              ...searchDeclarations(
+                tab === "all"
+                  ? declarations.filter((d) => !d.type)
+                  : declarations,
+                query,
+                false,
+                limit,
+              ),
+            );
+        }
+        if (tab === "all" || tab === "files") {
+          index.files ??= listFiles(this.root);
+          index.files.catch(() => (index.files = undefined));
+          hits.push(...searchFiles(await index.files, query, limit));
+        }
+        if (tab === "all" || tab === "actions")
+          hits.push(
+            ...rank(
+              this.actions(),
+              query,
+              (a) => a.name,
+              limit,
+              (a) => (a.detail ? 0 : 1),
+            ),
+          );
+        if (tab === "text")
+          return searchText(
+            this.ripgrep,
+            this.root,
+            { query, matchCase: false, words: false, regex: false, mask: "" },
+            200,
+            signal,
+          );
+        return { hits, truncated: false };
+      }
+      case "findInFiles":
+        if (!str("query")) return { hits: [], truncated: false };
+        return searchText(
+          this.ripgrep,
+          this.root,
+          {
+            query: str("query"),
+            matchCase: p.matchCase === true,
+            words: p.words === true,
+            regex: p.regex === true,
+            mask: str("mask"),
+          },
+          1000,
+          signal,
+        );
+      case "searchPreview":
+        return this.preview(str("path"));
+      case "runAction": {
+        const action = this.actions().find((a) => a.command === str("command"));
+        if (!action) throw new Error("Unknown action");
+        await vscode.commands.executeCommand(action.command!);
+        return;
+      }
       case "selectRepo": {
         const root = str("root");
         if (!this.services.has(root)) throw new Error("Unknown repository");
@@ -1248,6 +1356,51 @@ class Workbench {
     void service.deep
       .prioritize(language, file, text)
       .catch((e) => this.log.appendLine(String(e)));
+  }
+  /** Commands contributed by installed extensions, for Search Everywhere's Actions tab. */
+  private actions(): SearchHit[] {
+    const title = (t: unknown) =>
+      typeof t === "string"
+        ? t
+        : typeof (t as { value?: unknown })?.value === "string"
+          ? (t as { value: string }).value
+          : "";
+    return vscode.extensions.all.flatMap((extension) => {
+      const commands = extension.packageJSON?.contributes?.commands;
+      return (Array.isArray(commands) ? commands : [])
+        .filter(
+          (c) =>
+            typeof c?.command === "string" &&
+            title(c.title) &&
+            !title(c.title).startsWith("%"),
+        )
+        .map((c): SearchHit => ({
+          kind: "action",
+          name: title(c.title),
+          detail: title(c.category).startsWith("%") ? "" : title(c.category),
+          line: 0,
+          column: 0,
+          command: c.command,
+        }));
+    });
+  }
+  /** A repository file's text for the Find in Files preview. */
+  private async preview(file: string) {
+    const full = path.resolve(this.root, file);
+    if (!inside(this.root, full)) throw new Error("Outside the repository");
+    const open = vscode.workspace.textDocuments.find(
+      (d) => d.uri.scheme === "file" && d.uri.fsPath === full,
+    );
+    if (open) return { text: open.getText(), language: languageOf(file) };
+    const real = await fs.realpath(full);
+    if (!inside(await fs.realpath(this.root), real))
+      throw new Error("Outside the repository");
+    if ((await fs.stat(real)).size > 2 * 1024 * 1024)
+      return { text: "File too large to preview.", language: "plaintext" };
+    return {
+      text: await fs.readFile(real, "utf8"),
+      language: languageOf(file),
+    };
   }
   private locationUri(file: string, root = this.root) {
     return /^[a-z][\w+.-]*:\/\//i.test(file)
