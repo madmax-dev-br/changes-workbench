@@ -9,7 +9,7 @@ import { Navigator } from "./host/navigation";
 import { DeepManager } from "./host/deep";
 import { ReviewStore } from "./host/reviews";
 import { findExecutable } from "./host/dependencies";
-import { loadRuns, type RunConfiguration } from "./host/runs";
+import { INIT_SCRIPT, loadRuns, type RunConfiguration } from "./host/runs";
 import {
   languageOf,
   revertChange,
@@ -66,6 +66,8 @@ class Workbench {
   );
   /** Running run configurations, keyed by `root\0name`. */
   private executions = new Map<string, vscode.TaskExecution>();
+  /** Run configurations per root; rereading walks the tree for Gradle/Maven modules. */
+  private runCache = new Map<string, Promise<RunConfiguration[]>>();
   constructor(private context: vscode.ExtensionContext) {
     this.reviews = new ReviewStore(
       context.workspaceState.get("reviews", {}),
@@ -387,9 +389,13 @@ class Workbench {
   private changed(uri?: vscode.Uri, type?: 1 | 2 | 3) {
     if (
       uri &&
-      /[\\/](\.run|runConfigurations)[\\/][^\\/]+\.xml$/.test(uri.fsPath)
-    )
+      /[\\/](\.run|runConfigurations)[\\/][^\\/]+\.xml$|[\\/]\.idea[\\/]workspace\.xml$|[\\/](build\.gradle(\.kts)?|settings\.gradle(\.kts)?|pom\.xml|local\.properties)$/.test(
+        uri.fsPath,
+      )
+    ) {
+      this.runCache.clear();
       void this.updateRuns();
+    }
     this.epoch++;
     this.snapshots.clear();
     this.nativeBlameCache.clear();
@@ -769,7 +775,7 @@ class Workbench {
     if (!dirty) await document.save();
   }
   private async runInfos(root: string): Promise<RunInfo[]> {
-    return (await loadRuns(root)).map((r) => ({
+    return (await this.loadRuns(root)).map((r) => ({
       name: r.name,
       type: r.type,
       detail: r.compound
@@ -821,7 +827,7 @@ class Workbench {
       if (name) await this.startRun(this.root, name);
       else
         vscode.window.showInformationMessage(
-          "No run configurations in .run/ or .idea/runConfigurations/.",
+          "No run configurations or Android app modules found.",
         );
     } catch (e) {
       vscode.window.showErrorMessage(
@@ -845,7 +851,7 @@ class Workbench {
           title: "Run configuration",
           placeHolder: runs.length
             ? "Choose a configuration to run"
-            : "No run configurations in .run/ or .idea/runConfigurations/",
+            : "No run configurations or Android app modules found",
         },
       );
       if (!picked) return;
@@ -861,8 +867,23 @@ class Workbench {
     }
   }
   /** Launch a configuration (re-read from disk, never from the webview) in its own terminal. */
+  private get initScript() {
+    return path.join(
+      this.context.globalStorageUri.fsPath,
+      "changes-workbench-run.gradle",
+    );
+  }
+  private loadRuns(root: string, fresh = false) {
+    let runs = this.runCache.get(root);
+    if (!runs || fresh) {
+      runs = loadRuns(root, this.initScript);
+      this.runCache.set(root, runs);
+      runs.catch(() => this.runCache.delete(root));
+    }
+    return runs;
+  }
   private async startRun(root: string, name: string, seen = new Set<string>()) {
-    const runs = await loadRuns(root);
+    const runs = await this.loadRuns(root, seen.size === 0);
     const run = runs.find((r) => r.name === name);
     if (!run) throw new Error(`Run configuration '${name}' not found`);
     await this.context.workspaceState.update(`selectedRun:${root}`, name);
@@ -874,6 +895,10 @@ class Workbench {
       return;
     }
     if (!run.command) throw new Error(run.reason);
+    if (run.command.includes(this.initScript)) {
+      await fs.mkdir(path.dirname(this.initScript), { recursive: true });
+      await fs.writeFile(this.initScript, INIT_SCRIPT);
+    }
     // Like IntelliJ's Rerun: stop the running instance first.
     const key = `${root}\0${name}`;
     const running = this.executions.get(key);

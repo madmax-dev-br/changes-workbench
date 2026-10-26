@@ -1027,3 +1027,85 @@ footer button {
   text-decoration: underline;
   cursor: pointer;
 }
+.cw-find {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  z-index: 6;
+  color: var(--muted);
+}
+.cw-find input {
+  flex: 0 1 320px;
+  min-width: 80px;
+  height: 24px;
+  margin: 0 4px 0 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.cw-find input:focus {
+  border-color: var(--accent);
+}
+.cw-find input.none {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, var(--bg));
+}
+.cw-find button {
+  min-width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text);
+}
+.cw-find button:hover:not(:disabled) {
+  background: var(--bar);
+}
+.cw-find-toggle {
+  font:
+    600 11px "SF Mono",
+    Menlo,
+    Consolas,
+    monospace;
+  color: var(--muted) !important;
+}
+.cw-find-toggle.on {
+  color: var(--accent) !important;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.cw-find-count {
+  min-width: 70px;
+  padding: 0 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.cw-find-side {
+  flex: 1;
+  text-align: right;
+  padding-right: 8px;
+  font-size: 10px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.monaco-editor .cw-find-match {
+  background: color-mix(in srgb, #e0b33a 35%, transparent);
+  border-radius: 2px;
+}
+.monaco-editor .cw-find-current {
+  background: #e0b33a;
+  color: #1e1f22 !important;
+  border-radius: 2px;
+}

@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { loadRuns, resolveRun } from "../src/host/runs";
+import {
+  loadRuns,
+  resolveRun,
+  resolveRuns,
+  type BuildModule,
+} from "../src/host/runs";
 import { revertChange } from "../src/shared";
 
 const root = path.resolve("/work/shop");
@@ -27,7 +32,9 @@ test("resolves a Gradle configuration to the project wrapper with tasks, paramet
 </component>`,
     "Test.run.xml",
     root,
-    wrapper(process.platform === "win32" ? "gradlew.bat" : "gradlew"),
+    {
+      exists: wrapper(process.platform === "win32" ? "gradlew.bat" : "gradlew"),
+    },
   )!;
   assert.equal(run.name, "Test & lint");
   assert.equal(run.cwd, root);
@@ -52,7 +59,7 @@ test("falls back to the tool on PATH and reads Maven goals and profiles", () => 
 </component>`,
     "package.run.xml",
     root,
-    none,
+    { exists: none },
   )!;
   assert.equal(run.cwd, path.join(root, "server"));
   assert.equal(run.command, "mvn clean package -P prod -DskipTests");
@@ -112,17 +119,190 @@ test("runs shell scripts, inline shell text, npm scripts and compounds", () => {
   assert.equal(compound.reason, undefined);
 });
 
-test("keeps IDE-only configurations visible with a reason instead of a command", () => {
+const gradleModule = (dir: string, extra: Partial<BuildModule> = {}) =>
+  ({
+    dir: path.join(root, dir),
+    kind: "gradle",
+    buildRoot: root,
+    gradlePath: dir ? `:${dir.split("/").join(":")}` : ":",
+    ideName: ["shop", ...dir.split("/").filter(Boolean)].join("."),
+    android: false,
+    ...extra,
+  }) satisfies BuildModule;
+
+test("runs Java Application configurations on the module's Gradle runtime classpath", () => {
   const run = resolveRun(
-    `<configuration name="Server" type="JetRunConfigurationType">
-      <option name="MAIN_CLASS_NAME" value="dev.shop.ServerKt" />
-      <module name="shop.main" />
+    `<configuration name="Server" type="Application" factoryName="Application">
+      <option name="MAIN_CLASS_NAME" value="dev.shop.Server" />
+      <module name="shop.server.main" />
+      <option name="PROGRAM_PARAMETERS" value="--port 8080 --name &quot;my shop&quot;" />
+      <option name="VM_PARAMETERS" value="-Xmx256m" />
+      <envs><env name="MODE" value="dev" /></envs>
     </configuration>`,
     "Server.run.xml",
+    root,
+    {
+      exists: wrapper("gradlew"),
+      modules: [gradleModule(""), gradleModule("server")],
+      initScript: "/store/run.gradle",
+    },
+  )!;
+  assert.equal(run.reason, undefined);
+  assert.equal(run.cwd, root);
+  assert.deepEqual(run.env, { MODE: "dev" });
+  assert.equal(
+    run.command,
+    `./gradlew --init-script /store/run.gradle --no-configuration-cache :server:changesWorkbenchRun -PcwProject=:server -PcwMain=dev.shop.Server -PcwDir=${path.join(root, "server")} '-PcwArgs=--port 8080 --name "my shop"' -PcwJvmArgs=-Xmx256m`,
+  );
+});
+
+test("finds a Kotlin main class's module from its source file, or uses Maven exec", () => {
+  const kotlin = resolveRun(
+    `<configuration name="Cli" type="JetRunConfigurationType">
+      <option name="MAIN_CLASS_NAME" value="dev.shop.cli.MainKt" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    </configuration>`,
+    "Cli.run.xml",
+    root,
+    {
+      exists: (f) =>
+        f === path.join(root, "tools/cli/src/main/kotlin/dev/shop/cli/Main.kt"),
+      modules: [
+        gradleModule(""),
+        gradleModule("server"),
+        gradleModule("tools/cli"),
+      ],
+    },
+  )!;
+  assert.match(
+    kotlin.command!,
+    /^gradle .* :tools:cli:changesWorkbenchRun .*-PcwMain=dev\.shop\.cli\.MainKt/,
+  );
+  assert.match(kotlin.command!, new RegExp(`-PcwDir=${root}( |$)`));
+  const maven = resolveRun(
+    `<configuration name="Api" type="Application">
+      <option name="MAIN_CLASS_NAME" value="dev.api.App" />
+      <module name="api" />
+      <option name="PROGRAM_PARAMETERS" value="serve" />
+      <option name="VM_PARAMETERS" value="-Xmx1g" />
+    </configuration>`,
+    "Api.run.xml",
+    root,
+    {
+      exists: none,
+      modules: [{ ...gradleModule("api"), kind: "maven", ideName: "api" }],
+    },
+  )!;
+  assert.equal(maven.cwd, path.join(root, "api"));
+  assert.equal(
+    maven.command,
+    "mvn compile exec:java -Dexec.mainClass=dev.api.App -Dexec.args=serve",
+  );
+  assert.deepEqual(maven.env, { MAVEN_OPTS: "-Xmx1g" });
+  const missing = resolveRun(
+    `<configuration name="Lost" type="Application"><option name="MAIN_CLASS_NAME" value="a.B" /></configuration>`,
+    "Lost.run.xml",
+    root,
+    { exists: none, modules: [gradleModule(""), gradleModule("x")] },
+  )!;
+  assert.match(missing.reason!, /a\.B/);
+});
+
+test("keeps IDE-only configurations visible with a reason instead of a command", () => {
+  const run = resolveRun(
+    `<configuration name="Tests" type="JUnit">
+      <module name="shop.main" />
+    </configuration>`,
+    "Tests.run.xml",
     root,
   )!;
   assert.equal(run.command, undefined);
   assert.match(run.reason!, /IntelliJ/);
+});
+
+test("reads workspace.xml run configurations, skipping templates", () => {
+  const runs = resolveRuns(
+    `<project version="4">
+      <component name="RunManager" selected="Android App.app">
+        <configuration name="app" type="AndroidRunConfigurationType" factoryName="Android App">
+          <module name="shop.app.main" />
+          <option name="MODE" value="specific_activity" />
+          <option name="ACTIVITY_CLASS" value="dev.shop.MainActivity" />
+        </configuration>
+        <configuration default="true" type="Application" factoryName="Application" />
+        <list><item itemvalue="Android App.app" /></list>
+      </component>
+    </project>`,
+    "workspace.xml",
+    root,
+    {
+      exists: none,
+      modules: [
+        gradleModule("app", { android: true, applicationId: "dev.shop.debug" }),
+      ],
+    },
+  );
+  assert.deepEqual(
+    runs.map((r) => [r.name, r.command]),
+    [
+      [
+        "app",
+        "gradle :app:installDebug && adb shell am start -n dev.shop.debug/dev.shop.MainActivity",
+      ],
+    ],
+  );
+});
+
+test("detects Android app modules in separate Gradle builds below the repository", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "changes-android-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const write = async (file: string, text: string) => {
+    await fs.mkdir(path.dirname(path.join(dir, file)), { recursive: true });
+    await fs.writeFile(path.join(dir, file), text);
+  };
+  await write("package.json", "{}");
+  await write(
+    "mobile/settings.gradle.kts",
+    'rootProject.name = "Mobile"\ninclude(":app", ":core")\n',
+  );
+  await write("mobile/gradlew", "#!/bin/sh\n");
+  await write("mobile/local.properties", "sdk.dir=/nowhere/sdk\n");
+  await write(
+    "mobile/app/build.gradle.kts",
+    'plugins { alias(libs.plugins.android.application) }\nandroid {\n  namespace = "dev.mobile"\n  defaultConfig { applicationId = "dev.mobile.app" }\n  buildTypes { debug { applicationIdSuffix = ".debug" } }\n}\n',
+  );
+  await write(
+    "mobile/core/build.gradle.kts",
+    'plugins { id("com.android.library") }\n',
+  );
+  await write("mobile/app/build/generated/build.gradle", "ignored");
+  await write(
+    "tools/legacy/build.gradle",
+    "apply plugin: 'com.android.application'\n",
+  );
+  await write(
+    "mobile/core/src/main/java/dev/mobile/Tool.java",
+    "package dev.mobile; class Tool {}",
+  );
+  await write(
+    "mobile/.idea/workspace.xml",
+    `<project><component name="RunManager"><configuration name="Tool" type="Application"><option name="MAIN_CLASS_NAME" value="dev.mobile.Tool" /><module name="Mobile.core.main" /></configuration></component></project>`,
+  );
+  const runs = await loadRuns(dir, "/store/run.gradle");
+  const byName = Object.fromEntries(runs.map((r) => [r.name, r]));
+  assert.deepEqual(Object.keys(byName).sort(), ["Tool", "app", "legacy"]);
+  assert.equal(byName.app.cwd, path.join(dir, "mobile"));
+  assert.match(
+    byName.app.command!,
+    /^\.\/gradlew :app:installDebug && \S*adb shell monkey --pct-syskeys 0 -p dev\.mobile\.app\.debug -c android\.intent\.category\.LAUNCHER 1$/,
+  );
+  // A standalone module without a settings file is its own build.
+  assert.equal(byName.legacy.cwd, path.join(dir, "tools/legacy"));
+  assert.equal(byName.legacy.command, "gradle :installDebug");
+  assert.match(
+    byName.Tool.command!,
+    /:core:changesWorkbenchRun .*-PcwMain=dev\.mobile\.Tool/,
+  );
 });
 
 test("loads .run and .idea/runConfigurations, preferring .run on duplicate names", async (t) => {

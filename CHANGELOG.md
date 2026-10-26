@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Application, Kotlin and Spring Boot run configurations now run: their main class is compiled and started on the module's runtime classpath through Gradle (or Maven), with program arguments, VM options, working directory and environment.
+- Android app modules are detected anywhere in the repository, including Android builds in subfolders, and listed as run configurations. ▶ installs the debug build and launches it on the device or emulator.
+- Run configurations are also read from `.idea/workspace.xml` and from Gradle builds in subfolders.
+- IntelliJ-style find bar in the diff (`⌘F` / `Ctrl+F`) with match counter, next/previous, match case, whole words and regex.
+
 ## 0.2.0
 
 - Rollback from the gutter, as in IntelliJ: click a blue, green or grey-arrow change marker for the original lines, previous/next change, copy and **Rollback**. Also `⌘⌥Z` / `Ctrl+Alt+Z` and **Rollback Lines** in the right-click menu.

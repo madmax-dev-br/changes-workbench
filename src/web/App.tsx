@@ -402,6 +402,23 @@ export default function App() {
   useEffect(() => {
     const open = () => openFile();
     const key = (e: KeyboardEvent) => {
+      const mod = /Mac/i.test(navigator.platform) ? e.metaKey : e.ctrlKey;
+      // Find bar: ⌘F / Ctrl+F, then F3 or ⌘G / Ctrl+G (with Shift for the previous match).
+      if (mod && !e.altKey && e.key.toLowerCase() === "f" && snapshot) {
+        e.preventDefault();
+        e.stopPropagation();
+        diff.current?.find();
+        return;
+      }
+      if (
+        snapshot &&
+        (e.key === "F3" || (mod && !e.altKey && e.key.toLowerCase() === "g"))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        diff.current?.findNext(e.shiftKey ? -1 : 1);
+        return;
+      }
       if (!state?.intellijKeymap) return;
       if (e.key === "F7" && !e.altKey && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();

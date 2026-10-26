@@ -87,6 +87,8 @@ export interface DiffHandle {
   focus: () => void;
   definitions: () => void;
   documentation: () => void;
+  find: () => void;
+  findNext: (direction: number) => void;
 }
 interface Props {
   snapshot: Snapshot;
@@ -117,6 +119,116 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
     { change: LineChange; x: number; y: number } | undefined
   >();
   const popup = useRef<HTMLDivElement>(null);
+  // IntelliJ's find bar (⌘F / Ctrl+F) over the side of the diff that had focus.
+  const [find, setFind] = useState<FindState | undefined>();
+  const [found, setFound] = useState({ index: 0, count: 0, invalid: false });
+  const findInput = useRef<HTMLInputElement>(null);
+  const findSide = useRef<"modified" | "original">("modified");
+  const findMarks = useRef(
+    new Map<string, monaco.editor.IEditorDecorationsCollection>(),
+  );
+  const findEditor = () =>
+    findSide.current === "original"
+      ? diff.current?.getOriginalEditor()
+      : diff.current?.getModifiedEditor();
+  const findMatches = (state = find) => {
+    const model = findEditor()?.getModel();
+    if (!model || !state?.query) return [];
+    try {
+      // Monaco quietly returns no matches for an invalid pattern; report it instead.
+      if (state.regex) new RegExp(state.query);
+      return model
+        .findMatches(
+          state.query,
+          false,
+          state.regex,
+          state.matchCase,
+          state.words ? WORD_SEPARATORS : null,
+          false,
+          FIND_LIMIT,
+        )
+        .map((m) => m.range);
+    } catch {
+      return undefined;
+    }
+  };
+  const clearFindMarks = () => {
+    for (const marks of findMarks.current.values()) marks.clear();
+  };
+  /** Highlight every match, select the current one and keep it in view. */
+  const showMatches = (
+    ranges: monaco.Range[],
+    index: number,
+    focusEditor = false,
+  ) => {
+    const editor = findEditor();
+    if (!editor) return;
+    clearFindMarks();
+    let marks = findMarks.current.get(findSide.current);
+    if (!marks) {
+      marks = editor.createDecorationsCollection();
+      findMarks.current.set(findSide.current, marks);
+    }
+    marks.set(
+      ranges.map((range, i) => ({
+        range,
+        options: {
+          inlineClassName: i === index ? "cw-find-current" : "cw-find-match",
+          overviewRuler: undefined,
+        },
+      })),
+    );
+    const current = ranges[index];
+    if (current) {
+      editor.setSelection(current);
+      editor.revealRangeInCenterIfOutsideViewport(current);
+      if (focusEditor) editor.focus();
+    }
+  };
+  const step = (direction: number) => {
+    const ranges = findMatches();
+    if (!ranges?.length) return;
+    const editor = findEditor()!;
+    const at = editor.getSelection() ?? new monaco.Range(1, 1, 1, 1);
+    const index =
+      direction > 0
+        ? ranges.findIndex(
+            (r) => monaco.Range.compareRangesUsingStarts(r, at) > 0,
+          )
+        : ranges
+            .map((r) => monaco.Range.compareRangesUsingStarts(r, at) < 0)
+            .lastIndexOf(true);
+    const next = index >= 0 ? index : direction > 0 ? 0 : ranges.length - 1;
+    setFound({ index: next, count: ranges.length, invalid: false });
+    showMatches(ranges, next);
+  };
+  const openFind = () => {
+    const d = diff.current;
+    if (!d) return;
+    findSide.current = d.getOriginalEditor().hasTextFocus()
+      ? "original"
+      : "modified";
+    const editor = findEditor()!;
+    const selection = editor.getSelection();
+    const selected =
+      selection &&
+      !selection.isEmpty() &&
+      selection.startLineNumber === selection.endLineNumber
+        ? editor.getModel()?.getValueInRange(selection)
+        : undefined;
+    setFind((old) => ({
+      ...(old ?? FIND_DEFAULTS),
+      query: selected ?? old?.query ?? "",
+    }));
+    // Already open: select the query again (a new bar focuses itself on mount).
+    findInput.current?.focus();
+    findInput.current?.select();
+  };
+  const closeFind = () => {
+    clearFindMarks();
+    setFind(undefined);
+    findEditor()?.focus();
+  };
   const currentKey = useRef("");
   const navigationRequest = useRef<AbortController | undefined>(undefined);
   const markers = useRef<
@@ -229,7 +341,33 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
         .getAction("editor.action.showHover")
         ?.run();
     },
+    find: openFind,
+    findNext: (direction) => (find ? step(direction) : openFind()),
   }));
+  // A prefilled query (the selection) is selected when the bar opens, so typing replaces it.
+  const findOpen = Boolean(find);
+  useEffect(() => {
+    if (findOpen) findInput.current?.select();
+  }, [findOpen]);
+  // Incremental search: as the query or options change, jump to the first match after the caret.
+  useEffect(() => {
+    if (!find) return;
+    const ranges = findMatches();
+    if (!ranges) {
+      clearFindMarks();
+      setFound({ index: 0, count: 0, invalid: true });
+      return;
+    }
+    const caret = findEditor()?.getSelection()?.getStartPosition();
+    const after = caret
+      ? ranges.findIndex(
+          (r) => monaco.Position.compare(r.getStartPosition(), caret) >= 0,
+        )
+      : 0;
+    const index = Math.max(0, after);
+    setFound({ index, count: ranges.length, invalid: false });
+    showMatches(ranges, index);
+  }, [find, props.snapshot.version]);
   useEffect(() => {
     if (!mount.current) return;
     const editor = monaco.editor.createDiffEditor(mount.current, {
@@ -784,7 +922,94 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
   );
   return (
     <>
-      <div ref={mount} className="diff-editor" data-testid="diff-editor" />
+      {find && (
+        <div className="cw-find" role="search">
+          <span className="codicon codicon-search" aria-hidden="true" />
+          <input
+            ref={findInput}
+            aria-label="Find"
+            autoFocus
+            placeholder="Search"
+            className={
+              found.invalid || (find.query && !found.count) ? "none" : ""
+            }
+            value={find.query}
+            onChange={(e) => setFind({ ...find, query: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                step(e.shiftKey ? -1 : 1);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                closeFind();
+              }
+            }}
+          />
+          {(
+            [
+              ["matchCase", "Aa", "Match case"],
+              ["words", "W", "Words"],
+              ["regex", ".*", "Regex"],
+            ] as const
+          ).map(([key, label, title]) => (
+            <button
+              key={key}
+              className={`cw-find-toggle ${find[key] ? "on" : ""}`}
+              aria-label={title}
+              aria-pressed={find[key]}
+              title={title}
+              onClick={() => {
+                setFind({ ...find, [key]: !find[key] });
+                findInput.current?.focus();
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          <span className="cw-find-count" aria-live="polite">
+            {!find.query
+              ? ""
+              : found.invalid
+                ? "Bad pattern"
+                : found.count
+                  ? `${found.index + 1}/${found.count >= FIND_LIMIT ? `${FIND_LIMIT}+` : found.count}`
+                  : "0 results"}
+          </span>
+          <button
+            aria-label="Previous occurrence"
+            title="Previous Occurrence (⇧Enter)"
+            disabled={!found.count}
+            onClick={() => step(-1)}
+          >
+            <span className="codicon codicon-arrow-up" />
+          </button>
+          <button
+            aria-label="Next occurrence"
+            title="Next Occurrence (Enter)"
+            disabled={!found.count}
+            onClick={() => step(1)}
+          >
+            <span className="codicon codicon-arrow-down" />
+          </button>
+          <span className="cw-find-side">
+            {findSide.current === "original" ? "Base" : "Working tree"}
+          </span>
+          <button
+            aria-label="Close search"
+            title="Close (Esc)"
+            onClick={closeFind}
+          >
+            <span className="codicon codicon-close" />
+          </button>
+        </div>
+      )}
+      <div
+        ref={mount}
+        className="diff-editor"
+        data-testid="diff-editor"
+        style={{ top: find ? FIND_HEIGHT : 0 }}
+      />
       {menu && (
         <div
           className="cw-menu"
@@ -817,6 +1042,21 @@ export const Diff = forwardRef<DiffHandle, Props>((props, ref) => {
   );
 });
 const BLAME_WIDTH = 24;
+interface FindState {
+  query: string;
+  matchCase: boolean;
+  words: boolean;
+  regex: boolean;
+}
+const FIND_DEFAULTS: FindState = {
+  query: "",
+  matchCase: false,
+  words: false,
+  regex: false,
+};
+const FIND_LIMIT = 1000;
+const FIND_HEIGHT = 34;
+const WORD_SEPARATORS = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 /** IntelliJ-style gutter annotation: short date and author. */
 function blameLabel(b: BlameLine) {
   if (b.local) return "Not committed";
