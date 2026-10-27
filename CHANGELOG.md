@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.1
 
 - Android apps without product flavors run as before build variants: `installDebug`, then a launch of the debug application ID, with no Gradle read of variants and no variant combo box. Apps with `productFlavors` keep the build variant combo box.
 
