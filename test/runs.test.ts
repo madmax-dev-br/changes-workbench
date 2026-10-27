@@ -268,7 +268,7 @@ test("detects Android app modules in separate Gradle builds below the repository
   await write("package.json", "{}");
   await write(
     "mobile/settings.gradle.kts",
-    'rootProject.name = "Mobile"\ninclude(":app", ":core")\n',
+    'rootProject.name = "Mobile"\ninclude(":app", ":core", ":shop")\n',
   );
   await write("mobile/gradlew", "#!/bin/sh\n");
   await write(
@@ -283,6 +283,10 @@ test("detects Android app modules in separate Gradle builds below the repository
   await write(
     "mobile/core/build.gradle.kts",
     'plugins { id("com.android.library") }\n',
+  );
+  await write(
+    "mobile/shop/build.gradle.kts",
+    'plugins { id("com.android.application") }\nandroid {\n  defaultConfig { applicationId = "dev.shop" }\n  flavorDimensions += "env"\n  productFlavors { create("hmg") { dimension = "env" } }\n}\n',
   );
   await write("mobile/app/build/generated/build.gradle", "ignored");
   await write(
@@ -299,25 +303,38 @@ test("detects Android app modules in separate Gradle builds below the repository
   );
   const runs = await loadRuns(dir, "/store/run.gradle");
   const byName = Object.fromEntries(runs.map((r) => [r.name, r]));
-  assert.deepEqual(Object.keys(byName).sort(), ["Tool", "app", "legacy"]);
+  assert.deepEqual(Object.keys(byName).sort(), [
+    "Tool",
+    "app",
+    "legacy",
+    "shop",
+  ]);
   assert.equal(byName.app.cwd, path.join(dir, "mobile"));
-  assert.equal(
-    byName.app.command,
-    "./gradlew --init-script /store/run.gradle --no-configuration-cache :app:changesWorkbenchAndroidRun -PcwProject=:app",
+  // Without flavors: the plain debug install, then a launch of the debug application ID.
+  assert.match(
+    byName.app.command!,
+    /^\.\/gradlew :app:installDebug && \S*adb shell monkey --pct-syskeys 0 -p dev\.mobile\.app\.debug -c android\.intent\.category\.LAUNCHER 1$/,
   );
-  assert.equal(
-    byName.app.android!.variants,
-    "./gradlew --init-script /store/run.gradle --no-configuration-cache -q :app:changesWorkbenchVariants -PcwProject=:app",
-  );
-  assert.equal(
-    withVariant(byName.app, "interHmgDebug"),
-    `${byName.app.command} -PcwVariant=interHmgDebug`,
-  );
-  assert.equal(
-    buildCommand(byName.app, "interHmgDebug"),
-    "./gradlew :app:assembleInterHmgDebug",
-  );
+  assert.equal(byName.app.android!.variants, undefined);
+  assert.equal(byName.app.android!.applicationId, "dev.mobile.app.debug");
   assert.equal(buildCommand(byName.app), "./gradlew :app:assembleDebug");
+  // With flavors the variant is read from Gradle and chosen at run time.
+  assert.equal(
+    byName.shop.command,
+    "./gradlew --init-script /store/run.gradle --no-configuration-cache :shop:changesWorkbenchAndroidRun -PcwProject=:shop",
+  );
+  assert.equal(
+    byName.shop.android!.variants,
+    "./gradlew --init-script /store/run.gradle --no-configuration-cache -q :shop:changesWorkbenchVariants -PcwProject=:shop",
+  );
+  assert.equal(
+    withVariant(byName.shop, "hmgDebug"),
+    `${byName.shop.command} -PcwVariant=hmgDebug`,
+  );
+  assert.equal(
+    buildCommand(byName.shop, "hmgDebug"),
+    "./gradlew :shop:assembleHmgDebug",
+  );
   // A standalone module without a settings file is its own build.
   assert.equal(byName.legacy.cwd, path.join(dir, "tools/legacy"));
   assert.match(

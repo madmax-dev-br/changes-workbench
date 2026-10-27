@@ -886,7 +886,7 @@ class Workbench {
         const config = (await this.loadRuns(this.root)).find(
           (r) => r.name === str("name"),
         );
-        if (config?.android) await this.loadVariants(config, true);
+        if (config?.android?.variants) await this.loadVariants(config, true);
         return;
       }
       case "layout": {
@@ -962,7 +962,7 @@ class Workbench {
         runnable: Boolean(r.command || r.compound?.length),
         running: this.executions.has(`${root}\0${r.name}`),
         build: buildCommand(r, variant),
-        ...(r.android && {
+        ...(r.android?.variants && {
           variants: this.cachedVariants(r) ?? [],
           variant,
           loadingVariants: this.variantLoads.has(r.android.module),
@@ -972,7 +972,7 @@ class Workbench {
   }
   /** Build variants of an Android run's module, as last read from Gradle. */
   private cachedVariants(run: RunConfiguration) {
-    return run.android
+    return run.android?.variants
       ? this.context.workspaceState.get<string[]>(
           `variants:${run.android.module}`,
         )
@@ -992,7 +992,8 @@ class Workbench {
     config: RunConfiguration,
     fresh = false,
   ): Promise<string[]> {
-    const { module, variants } = config.android!;
+    const { module } = config.android!;
+    const variants = config.android!.variants!;
     const cached = this.cachedVariants(config);
     if (cached && !fresh) return Promise.resolve(cached);
     let load = this.variantLoads.get(module);
@@ -1048,9 +1049,11 @@ class Workbench {
       const root = this.root;
       const name = this.selectedRun(root, await this.runInfos(root));
       const run = (await this.loadRuns(root)).find((r) => r.name === name);
-      if (!run?.android) {
+      if (!run?.android?.variants) {
         vscode.window.showInformationMessage(
-          "The selected run configuration is not an Android app.",
+          run?.android
+            ? `'${run.name}' has no product flavors: it installs the debug build.`
+            : "The selected run configuration is not an Android app.",
         );
         return;
       }
@@ -1115,7 +1118,7 @@ class Workbench {
         (r) => r.name === selected?.name,
       );
       if (
-        config?.android &&
+        config?.android?.variants &&
         !this.cachedVariants(config) &&
         !this.variantLoads.has(config.android.module) &&
         !this.variantFailures.has(config.android.module)
@@ -1161,12 +1164,12 @@ class Workbench {
       const runs = await this.loadRuns(root).catch(() => []);
       const apps = runs.filter((r) => r.android);
       const adb = findAdb([...new Set(apps.map((r) => r.cwd))]);
-      const appIds = apps.flatMap(
-        (r) =>
-          this.context.workspaceState.get<string[]>(
-            `variantIds:${r.android!.module}`,
-          ) ?? [],
-      );
+      const appIds = apps.flatMap((r) => [
+        ...(r.android!.applicationId ? [r.android!.applicationId] : []),
+        ...(this.context.workspaceState.get<string[]>(
+          `variantIds:${r.android!.module}`,
+        ) ?? []),
+      ]);
       type Item = vscode.QuickPickItem & {
         target?: DebugTarget;
         remote?: boolean;
@@ -1398,7 +1401,7 @@ class Workbench {
       return;
     }
     if (!run.command) throw new Error(run.reason);
-    if (run.android)
+    if (run.android?.variants)
       // Without the variant list Gradle falls back to `debug` or names the variants to choose from.
       await this.loadVariants(run).catch(() => {});
     const command = withVariant(run, this.variant(root, run))!;

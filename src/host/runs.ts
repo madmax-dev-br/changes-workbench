@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { findAdb } from "./debug";
 
 /**
  * An IntelliJ run configuration (`.run/*.run.xml`, `.idea/runConfigurations/*.xml` or
@@ -23,8 +24,13 @@ export interface RunConfiguration {
   /** Android app module: the build variant is chosen at run time (see `withVariant`). */
   android?: {
     module: string;
-    /** Command that prints the installable variants as `cw-variant <name> <applicationId>` lines. */
-    variants: string;
+    /**
+     * Command that prints the installable variants as `cw-variant <name> <applicationId>` lines;
+     * absent without product flavors, where the run installs `debug`.
+     */
+    variants?: string;
+    /** The debug application ID, when the build file states it. */
+    applicationId?: string;
   };
 }
 interface XmlNode {
@@ -105,6 +111,10 @@ export interface BuildModule {
   /** IntelliJ's module name without the source-set suffix, such as `shop.app`. */
   ideName: string;
   android: boolean;
+  /** The app declares product flavors, so `installDebug` alone is ambiguous. */
+  flavors?: boolean;
+  /** `applicationId` plus the debug suffix, when written as literals. */
+  applicationId?: string;
 }
 export interface RunContext {
   /** The IntelliJ project directory ($PROJECT_DIR$) that holds the configuration. */
@@ -189,6 +199,24 @@ function androidRun(
     quote(ctx.initScript),
     "--no-configuration-cache",
   ];
+  // Without flavors there is a single debug variant: install it and launch it, no init script.
+  if (!module.flavors && module.applicationId) {
+    const id = module.applicationId;
+    const adb = quote(findAdb([module.buildRoot], ctx.env));
+    run.command = [
+      `${gradle[0]} ${gradleTask(module, "installDebug")}`,
+      !launch
+        ? ""
+        : activity
+          ? `${adb} shell am start -n ${quote(`${id}/${activity}`)}`
+          : `${adb} shell monkey --pct-syskeys 0 -p ${quote(id)} -c android.intent.category.LAUNCHER 1`,
+    ]
+      .filter(Boolean)
+      .join(" && ");
+    run.build = `${gradle[0]} ${gradleTask(module, "assemble")}`;
+    run.android = { module: module.dir, applicationId: id };
+    return;
+  }
   const project = quote(`-PcwProject=${module.gradlePath}`);
   run.command = [
     ...gradle,
@@ -203,12 +231,15 @@ function androidRun(
   run.build = `${gradle[0]} ${gradleTask(module, "assemble")}`;
   run.android = {
     module: module.dir,
-    variants: [
-      ...gradle,
-      "-q",
-      gradleTask(module, "changesWorkbenchVariants"),
-      project,
-    ].join(" "),
+    applicationId: module.applicationId,
+    variants: module.flavors
+      ? [
+          ...gradle,
+          "-q",
+          gradleTask(module, "changesWorkbenchVariants"),
+          project,
+        ].join(" ")
+      : undefined,
   };
 }
 /** The command that runs an Android configuration with a build variant such as `freeDebug`. */
@@ -546,6 +577,14 @@ export async function findModules(root: string): Promise<BuildModule[]> {
             /android[.-]?application/i.test(line) &&
             !/\bapply\s*\(?\s*false/.test(line),
         );
+    const id = /\bapplicationId\s*=?\s*["']([^"']+)["']/.exec(text)?.[1];
+    const debug =
+      /\b(?:debug|(?:getByName|named)\(\s*["']debug["']\s*\))\s*\{/.exec(text);
+    const suffix = debug
+      ? /\bapplicationIdSuffix\s*=?\s*["']([^"']+)["']/.exec(
+          block(text, debug.index),
+        )?.[1]
+      : undefined;
     return {
       dir,
       kind: file === "pom.xml" ? "maven" : "gradle",
@@ -553,8 +592,20 @@ export async function findModules(root: string): Promise<BuildModule[]> {
       gradlePath: segments.length ? `:${segments.join(":")}` : ":",
       ideName: [rootName, ...segments].join("."),
       android,
+      flavors: android && /\b(?:productFlavors|flavorDimensions)\b/.test(text),
+      applicationId: android && id ? id + (suffix ?? "") : undefined,
     } satisfies BuildModule;
   });
+}
+/** The body of the `{ … }` block that starts at or after `at`. */
+function block(text: string, at: number) {
+  const open = text.indexOf("{", at);
+  if (open < 0) return "";
+  let depth = 0;
+  for (let i = open; i < text.length; i++)
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth === 0) return text.slice(open + 1, i);
+  return text.slice(open + 1);
 }
 /** The Gradle init script behind Application, Kotlin and Android configurations. */
 export const INIT_SCRIPT = `// Changes Workbench: runs an IntelliJ Application configuration on a module's runtime classpath.
