@@ -166,3 +166,86 @@ test("large working file returns a bounded explanatory state", async (t) => {
   assert.equal(snap.tooLarge, true);
   assert.equal(snap.current, "");
 });
+test("lists the changes inside submodules, nested ones included, under their folders", async (t) => {
+  const dirs = await Promise.all([repo(), repo(), repo()]);
+  t.after(() =>
+    Promise.all(
+      dirs.map((d) => fs.rm(d.root, { recursive: true, force: true })),
+    ),
+  );
+  const [main, lib, deep] = dirs;
+  const commit = async (r: (typeof dirs)[0], file: string, text: string) => {
+    await fs.writeFile(path.join(r.root, file), text);
+    r.git("add", ".");
+    r.git("commit", "-m", file);
+  };
+  const allow = ["-c", "protocol.file.allow=always"];
+  await commit(deep, "Deep.kt", "val deep = 1\n");
+  await commit(lib, "Lib.kt", "val lib = 1\n");
+  lib.git(...allow, "submodule", "add", deep.root, "deep");
+  lib.git("commit", "-m", "deep");
+  await commit(main, "App.kt", "val app = 1\n");
+  main.git(...allow, "submodule", "add", lib.root, "libs/lib");
+  main.git("commit", "-m", "lib");
+  main.git(...allow, "submodule", "update", "--init", "--recursive");
+
+  const sub = path.join(main.root, "libs/lib");
+  await fs.writeFile(path.join(sub, "Lib.kt"), "val lib = 2\n");
+  await fs.writeFile(path.join(sub, "New.kt"), "val added = 1\n");
+  await fs.writeFile(path.join(sub, "deep/Deep.kt"), "val deep = 2\n");
+  const buffers: Buffers = new Map([
+    [path.join(sub, "Lib.kt"), { text: "val lib = 3\n", version: 1 }],
+  ]);
+  const service = new GitService(main.root, () => buffers);
+  assert.deepEqual(
+    (await service.allSubmodules()).map((s) => s.path),
+    ["libs/lib", "libs/lib/deep"],
+  );
+  const changes = await service.changes();
+  // Edited files only: the submodules' commits did not move, so no gitlink entries.
+  assert.deepEqual(
+    changes.map((c) => [c.path, c.status, c.dirty]),
+    [
+      ["libs/lib/deep/Deep.kt", "M", false],
+      ["libs/lib/Lib.kt", "M", true],
+      ["libs/lib/New.kt", "?", false],
+    ],
+  );
+  const snap = await service.snapshot("libs/lib/Lib.kt");
+  assert.equal(snap.path, "libs/lib/Lib.kt");
+  assert.equal(snap.original, "val lib = 1\n");
+  assert.equal(snap.current, "val lib = 3\n");
+  const nested = await service.snapshot("libs/lib/deep/Deep.kt");
+  assert.equal(nested.original, "val deep = 1\n");
+  assert.equal(nested.current, "val deep = 2\n");
+  const blame = await service.blame("libs/lib/deep/Deep.kt", nested.current);
+  assert.equal(blame[0].path, "libs/lib/deep/Deep.kt");
+
+  // A submodule moved to a new commit is listed as well, with its files.
+  const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: sub,
+    encoding: "utf8",
+  }).trim();
+  execFileSync("git", ["add", "New.kt"], { cwd: sub });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=T",
+      "-c",
+      "user.email=t@example.test",
+      "commit",
+      "-m",
+      "new",
+    ],
+    { cwd: sub },
+  );
+  const moved = await service.changes();
+  const gitlink = moved.find((c) => c.path === "libs/lib");
+  assert.equal(gitlink?.submodule, true);
+  assert.ok(moved.some((c) => c.path === "libs/lib/Lib.kt"));
+  const pointer = await service.snapshot("libs/lib");
+  assert.equal(pointer.original, `Subproject commit ${sha}\n`);
+  assert.match(pointer.current, /^Subproject commit [0-9a-f]{40}\n$/);
+  assert.ok((await service.blame("libs/lib", pointer.current))[0].local);
+});

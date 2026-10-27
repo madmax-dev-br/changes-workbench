@@ -424,13 +424,20 @@ class Workbench {
     const service: Services = { git, navigation, deep, watchers: [] };
     this.services.set(root, service);
     try {
-      const paths = await Promise.all(
-        ["--absolute-git-dir", "--git-common-dir"].map((flag) =>
-          git
-            .git(["rev-parse", flag])
-            .then((b) => path.resolve(root, b.toString().trim())),
-        ),
-      );
+      // Submodules keep their index and HEAD in their own Git directory.
+      const repos = [git, ...(await git.allSubmodules()).map((s) => s.git)];
+      const paths = (
+        await Promise.all(
+          repos.flatMap((repo) =>
+            ["--absolute-git-dir", "--git-common-dir"].map((flag) =>
+              repo
+                .git(["rev-parse", flag])
+                .then((b) => path.resolve(repo.root, b.toString().trim()))
+                .catch(() => ""),
+            ),
+          ),
+        )
+      ).filter(Boolean);
       for (const directory of new Set(paths)) {
         service.watchers.push(
           watch(directory, { persistent: false }, () => this.changed()),
@@ -528,6 +535,7 @@ class Workbench {
         head: await service.git.head(),
         branch: await service.git.branch(),
         changes,
+        submodules: (await service.git.allSubmodules()).map((s) => s.path),
       },
       scope,
       mode: service.deep.enabled ? "deep" : "light",

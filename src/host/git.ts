@@ -19,9 +19,11 @@ export function inside(root: string, file: string) {
     rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel)
   );
 }
-export function parseStatus(data: Buffer): Change[] {
+/** A `git status` entry; `sub` is porcelain v2's submodule state (`S<c><m><u>`, or `N...`). */
+export type StatusEntry = Change & { sub?: string };
+export function parseStatus(data: Buffer): StatusEntry[] {
   const fields = data.toString("utf8").split("\0");
-  const result: Change[] = [];
+  const result: StatusEntry[] = [];
   for (let i = 0; i < fields.length; i++) {
     const line = fields[i];
     if (!line) continue;
@@ -59,6 +61,7 @@ export function parseStatus(data: Buffer): Change[] {
             : xy.includes("A")
               ? "A"
               : "M";
+    const sub = parts[2];
     result.push({
       path: file,
       oldPath,
@@ -66,15 +69,107 @@ export function parseStatus(data: Buffer): Change[] {
       worktree: xy[1],
       status,
       dirty: false,
+      ...(sub?.startsWith("S") && { submodule: true, sub }),
     });
   }
   return result;
 }
+/** `git config -z --get-regexp` output of `.gitmodules`: the submodule paths. */
+export function parseSubmodulePaths(data: Buffer | string) {
+  return data
+    .toString("utf8")
+    .split("\0")
+    .flatMap((entry) => {
+      const at = entry.indexOf("\n");
+      return at > 0 && /\.path$/.test(entry.slice(0, at))
+        ? [
+            entry
+              .slice(at + 1)
+              .replace(/^\.\//, "")
+              .replace(/\/+$/, ""),
+          ]
+        : [];
+    })
+    .filter(Boolean);
+}
 export class GitService {
+  private children = new Map<string, GitService>();
+  private submoduleList?: { at: number; paths: Promise<string[]> };
   constructor(
     public root: string,
     private getBuffers: () => Buffers = () => new Map(),
   ) {}
+  /**
+   * Initialized submodules declared in `.gitmodules`, relative to this repository. Checked again
+   * after a few seconds, so `git submodule update --init` shows up without a reload.
+   */
+  submodules(): Promise<string[]> {
+    const now = Date.now();
+    if (this.submoduleList && now - this.submoduleList.at < 3000)
+      return this.submoduleList.paths;
+    const paths = this.git([
+      "config",
+      "-z",
+      "--file",
+      ".gitmodules",
+      "--get-regexp",
+      "^submodule\\..*\\.path$",
+    ])
+      .then(async (out) => {
+        const declared = parseSubmodulePaths(out).filter((p) =>
+          inside(this.root, path.resolve(this.root, p)),
+        );
+        const initialized = await Promise.all(
+          declared.map((p) =>
+            fs.stat(path.join(this.root, p, ".git")).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        );
+        return declared.filter((_, i) => initialized[i]);
+      })
+      .catch(() => [] as string[]);
+    this.submoduleList = { at: now, paths };
+    return paths;
+  }
+  private child(submodule: string) {
+    let git = this.children.get(submodule);
+    if (!git) {
+      git = new GitService(path.join(this.root, submodule), this.getBuffers);
+      this.children.set(submodule, git);
+    }
+    return git;
+  }
+  /** Every initialized submodule, nested ones included, by path relative to this repository. */
+  async allSubmodules(): Promise<{ path: string; git: GitService }[]> {
+    const nested = await Promise.all(
+      (await this.submodules()).map(async (submodule) => {
+        const git = this.child(submodule);
+        return [
+          { path: submodule, git },
+          ...(await git.allSubmodules()).map((n) => ({
+            path: `${submodule}/${n.path}`,
+            git: n.git,
+          })),
+        ];
+      }),
+    );
+    return nested.flat();
+  }
+  /** The submodule that owns a repository path, and the path inside it. */
+  private async route(file: string) {
+    const submodule = (await this.submodules())
+      .filter((s) => file.startsWith(`${s}/`))
+      .sort((a, b) => b.length - a.length)[0];
+    return submodule
+      ? {
+          prefix: `${submodule}/`,
+          git: this.child(submodule),
+          file: file.slice(submodule.length + 1),
+        }
+      : undefined;
+  }
   git(args: string[], options: RunOptions = {}) {
     return queue.use(() =>
       run(
@@ -121,16 +216,39 @@ export class GitService {
       throw new Error("File is outside the repository");
     return file;
   }
+  /** Changed files, with each submodule's own changes listed under its folder, as IntelliJ does. */
   async changes(scope: Scope = "all", signal?: AbortSignal): Promise<Change[]> {
-    const list = parseStatus(
-      await this.git(
-        ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
-        { signal },
+    const [entries, submodules] = await Promise.all([
+      this.git(["status", "--porcelain=v2", "-z", "--untracked-files=all"], {
+        signal,
+      }).then(parseStatus),
+      this.submodules(),
+    ]);
+    const known = new Set(submodules);
+    // A submodule with only edited files shows those files; its commit is listed when it moved.
+    const list: Change[] = entries
+      .filter(
+        (c) => !known.has(c.path) || c.index !== "." || c.sub?.[1] === "C",
+      )
+      .map(({ sub: _, ...c }) => c);
+    const nested = await Promise.all(
+      submodules.map(async (submodule) =>
+        (
+          await this.child(submodule)
+            .changes("all", signal)
+            .catch(() => [])
+        ).map((c): Change => ({
+          ...c,
+          path: `${submodule}/${c.path}`,
+          oldPath: c.oldPath && `${submodule}/${c.oldPath}`,
+        })),
       ),
     );
+    list.push(...nested.flat());
+    const owned = submodules.map((s) => path.join(this.root, s));
     const map = new Map(list.map((c) => [c.path, c]));
     for (const [file] of this.getBuffers())
-      if (inside(this.root, file)) {
+      if (inside(this.root, file) && !owned.some((s) => inside(s, file))) {
         const relative = path
           .relative(this.root, file)
           .split(path.sep)
@@ -215,6 +333,18 @@ export class GitService {
     known?: Change,
   ): Promise<Snapshot> {
     this.validate(file);
+    const routed = await this.route(file);
+    if (routed) {
+      const strip = (p?: string) =>
+        p?.startsWith(routed.prefix) ? p.slice(routed.prefix.length) : p;
+      const snap = await routed.git.snapshot(
+        routed.file,
+        scope,
+        signal,
+        known && { ...known, path: routed.file, oldPath: strip(known.oldPath) },
+      );
+      return { ...snap, path: file, oldPath: routed.prefix + snap.oldPath };
+    }
     const change =
       known ?? (await this.changes("all", signal)).find((c) => c.path === file);
     const head = await this.head();
@@ -322,8 +452,18 @@ export class GitService {
     signal?: AbortSignal,
   ): Promise<BlameLine[]> {
     this.validate(file);
+    const routed = await this.route(file);
+    if (routed)
+      return (await routed.git.blame(routed.file, text, ref, signal)).map(
+        (line) => ({ ...line, path: routed.prefix + line.path }),
+      );
     const head = await this.head();
-    if (!head) return localBlame(text, file);
+    // A submodule's `Subproject commit` line has no history of its own to blame.
+    const directory = await fs.stat(path.join(this.root, file)).then(
+      (s) => s.isDirectory(),
+      () => false,
+    );
+    if (!head || directory) return localBlame(text, file);
     const args = ["blame", "--line-porcelain"];
     if (ref) {
       if (!/^[a-f0-9]{40,64}$/.test(ref)) throw new Error("Invalid revision");
@@ -350,6 +490,11 @@ export class GitService {
   async commitSnapshot(sha: string, file: string): Promise<Snapshot> {
     if (!/^[a-f0-9]{40,64}$/.test(sha)) throw new Error("Invalid commit");
     this.validate(file);
+    const routed = await this.route(file);
+    if (routed) {
+      const snap = await routed.git.commitSnapshot(sha, routed.file);
+      return { ...snap, path: file, oldPath: file };
+    }
     const line = (await this.git(["rev-list", "--parents", "-n", "1", sha]))
       .toString()
       .trim()

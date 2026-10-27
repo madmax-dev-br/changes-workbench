@@ -682,6 +682,7 @@ export default function App() {
           </div>
           <FileTree
             changes={filtered}
+            submodules={state?.repo.submodules}
             selected={selected}
             onSelect={setSelected}
           />
@@ -1119,13 +1120,17 @@ interface TreeRow {
   folder: boolean;
   change?: Change;
   count?: number;
+  /** A Git submodule's folder. */
+  submodule?: boolean;
 }
 function FileTree({
   changes,
+  submodules = [],
   selected,
   onSelect,
 }: {
   changes: Change[];
+  submodules?: string[];
   selected: string;
   onSelect: (file: string) => void;
 }) {
@@ -1169,29 +1174,43 @@ function FileTree({
       }
     }
     const result: TreeRow[] = [];
+    const repos = new Set(submodules);
     function emit(node: Node, depth: number) {
       let label = node.label;
-      while (!node.change && node.children.size === 1) {
+      // A submodule keeps its own row, so its files are not folded into the parent folder's.
+      while (!node.change && node.children.size === 1 && !repos.has(node.key)) {
         const child = [...node.children.values()][0];
-        if (child.change) break;
+        if (child.change && !child.children.size) break;
         label += "/" + child.label;
         node = child;
       }
-      const folder = !node.change;
+      const folder = node.children.size > 0;
+      const submodule = repos.has(node.key) || Boolean(node.change?.submodule);
       result.push({
         key: node.key,
         label,
         depth,
         folder,
-        change: node.change,
+        change: folder ? undefined : node.change,
         count: node.count,
+        submodule,
       });
-      if (folder && !collapsed.has(node.key))
-        for (const child of node.children.values()) emit(child, depth + 1);
+      if (!folder || collapsed.has(node.key)) return;
+      // A submodule that moved to another commit and also has edited files: the commit first.
+      if (node.change)
+        result.push({
+          key: node.key,
+          label: "Submodule commit",
+          depth: depth + 1,
+          folder: false,
+          change: node.change,
+          submodule: true,
+        });
+      for (const child of node.children.values()) emit(child, depth + 1);
     }
     for (const node of root.children.values()) emit(node, 0);
     return result;
-  }, [changes, collapsed]);
+  }, [changes, collapsed, submodules]);
   useEffect(() => {
     vscode.setState({ ...vscode.getState(), collapsed: [...collapsed] });
   }, [collapsed]);
@@ -1245,8 +1264,8 @@ function FileTree({
       <div style={{ height: rows.length * rowHeight, position: "relative" }}>
         {rows.slice(start, end).map((row, index) => (
           <button
-            key={row.key}
-            className={`tree-row ${row.folder ? "folder-row" : "file-row"} ${selected === row.key ? "selected" : ""}`}
+            key={`${row.folder ? "folder" : "file"}:${row.key}`}
+            className={`tree-row ${row.folder ? "folder-row" : "file-row"} ${!row.folder && selected === row.key ? "selected" : ""}`}
             role="treeitem"
             aria-selected={row.folder ? undefined : selected === row.key}
             aria-expanded={row.folder ? !collapsed.has(row.key) : undefined}
@@ -1271,21 +1290,33 @@ function FileTree({
                 >
                   <Icon name="chevron" size={12} />
                 </span>
-                <Icon name="folder" size={15} />
+                {row.submodule ? (
+                  <span className="submodule-icon" title="Git submodule">
+                    <Icon name="branch" size={15} />
+                  </span>
+                ) : (
+                  <Icon name="folder" size={15} />
+                )}
                 <span className="tree-name">{row.label}</span>
                 <span className="tree-count">{row.count}</span>
               </>
             ) : (
               <>
-                <span
-                  className={`language-icon ${row.label.endsWith(".java") ? "java" : "kotlin"}`}
-                >
-                  {row.label.endsWith(".kt")
-                    ? "K"
-                    : row.label.endsWith(".java")
-                      ? "J"
-                      : "·"}
-                </span>
+                {row.submodule ? (
+                  <span className="submodule-icon" title="Git submodule">
+                    <Icon name="branch" size={15} />
+                  </span>
+                ) : (
+                  <span
+                    className={`language-icon ${row.label.endsWith(".java") ? "java" : "kotlin"}`}
+                  >
+                    {row.label.endsWith(".kt")
+                      ? "K"
+                      : row.label.endsWith(".java")
+                        ? "J"
+                        : "·"}
+                  </span>
+                )}
                 <span className="tree-name">{row.label}</span>
                 {row.change?.dirty && (
                   <span className="dirty-dot" title="Unsaved" />

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0
+
+- Local changes include Git submodules, as in IntelliJ: every initialized submodule in `.gitmodules`, nested ones included, is a folder in the change tree with its own modified, added and untracked files, their diffs and blame. A submodule moved to another commit also shows a **Submodule commit** entry with the old and new commit.
+
 ## 0.6.1
 
 - Android apps without product flavors run as before build variants: `installDebug`, then a launch of the debug application ID, with no Gradle read of variants and no variant combo box. Apps with `productFlavors` keep the build variant combo box.

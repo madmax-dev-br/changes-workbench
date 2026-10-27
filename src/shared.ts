@@ -8,6 +8,8 @@ export interface Change {
   status: "M" | "A" | "D" | "R" | "U" | "?";
   dirty: boolean;
   reviewed?: boolean;
+  /** A submodule's recorded commit (`Subproject commit …`), not a file. */
+  submodule?: boolean;
 }
 export interface Snapshot {
   path: string;
@@ -99,6 +101,8 @@ export interface RepoState {
   branch: string;
   head: string;
   changes: Change[];
+  /** Paths of the initialized submodules, nested ones included; their changes are listed below them. */
+  submodules: string[];
 }
 /** A shared IntelliJ run configuration, as the panel shows it. */
 export interface RunInfo {

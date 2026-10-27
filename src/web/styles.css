@@ -315,6 +315,12 @@ kbd {
 .folder-chevron {
   display: flex;
 }
+.submodule-icon {
+  display: inline-flex;
+  width: 15px;
+  flex-shrink: 0;
+  color: #8fb3d9;
+}
 .folder-chevron.closed {
   transform: rotate(-90deg);
 }
